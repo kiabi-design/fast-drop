@@ -9,6 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'screens/incoming_text_screen.dart';
+import 'screens/transfer_screen.dart';
+import 'services/file_actions.dart';
 
 const String kAppVersion = '1.2';
 const int kTransferPort = 14680;
@@ -822,7 +825,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   Future<void> _handleIncomingClient(Socket client) async {
     client.setOption(SocketOption.tcpNoDelay, true);
-    final saveDir = await _resolveSaveDirectory();
+ _receiveCancelled = false;
+_activeIncomingClient = client;
+_activeRaf = null;
+_activeReceivedFilePath = null;
+
+   final saveDir = await _resolveSaveDirectory();
 
     RandomAccessFile? raf;
     String relPath = 'received_file';
@@ -851,7 +859,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
           }
 
           relPath = _sanitizeRelativePath(parts[0]);
-          totalSize = int.tryParse(parts[1]) ?? 0;
+         _activeRaf = raf;
+          _activeReceivedFilePath = outFile.path;
+
+           totalSize = int.tryParse(parts[1]) ?? 0;
 
           final outFile = File('${saveDir.path}/$relPath');
           await outFile.parent.create(recursive: true);
@@ -866,6 +877,8 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
           setState(() {
             _currentFileName = relPath;
+           if (_receiveCancelled) break;
+
             _totalBytes = totalSize;
             _transferredBytes = receivedBytes;
             _status = 'Приём: $relPath';
@@ -906,6 +919,25 @@ class _TransferHomePageState extends State<TransferHomePage> {
           sizeBytes: receivedBytes > 0 ? receivedBytes : totalSize,
           direction: 'Принято',
           savedPath: fullPath,
+} catch (e) {
+  await raf?.close();
+  if (_receiveCancelled) {
+    await _deletePartialReceivedFile();
+    if (mounted) {
+      setState(() {
+        _status = 'Приём отменён';
+        _speedMBps = 0.0;
+      });
+    }
+  } else if (mounted) {
+    setState(() => _status = 'Ошибка приёма: $e');
+  }
+} finally {
+  _activeIncomingClient = null;
+  _activeRaf = null;
+  await client.close();
+}
+
           timestamp: DateTime.now(),
         ),
       );
@@ -1185,8 +1217,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
       }
 
       setState(() {
+      _sendCancelled = false;
+      _activeSendRaf = null;
+
         _progress = 1.0;
         _speedMBps = 0.0;
+        _activeSendSocket = socket;
         _etaText = '00:00';
         _status = summaryDone;
       });
@@ -1236,12 +1272,16 @@ class _TransferHomePageState extends State<TransferHomePage> {
           if (nl != -1 && !completer.isCompleted) {
             final offsetStr = utf8.decode(bytes.sublist(0, nl)).trim();
             completer.complete(int.tryParse(offsetStr) ?? 0);
+            _activeSendRaf = raf;
+
             sub.pause();
           }
         },
         onError: (e) {
           if (!completer.isCompleted) completer.completeError(e);
         },
+        if (_sendCancelled) break;
+
         onDone: () {
           if (!completer.isCompleted) completer.complete(0);
         },
