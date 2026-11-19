@@ -11,8 +11,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 const String kAppVersion = '1.2';
-const int kTransferPort = 49152;
-const int kDiscoveryPort = 49153;
+const int kTransferPort = 14680;
+const int kDiscoveryPort = 14681;
 const int kChunkSize = 1024 * 1024;
 const BorderRadius kPillRadius = BorderRadius.all(Radius.circular(24));
 
