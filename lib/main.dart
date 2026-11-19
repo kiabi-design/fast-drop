@@ -395,36 +395,46 @@ class _TransferHomePageState extends State<TransferHomePage> {
             ),
             const SizedBox(height: 24),
             TextField(
-              controller: _ipController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'IP-адрес приёмника',
-                hintText: 'Например, 172.20.10.1 или 192.168.1.50',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _isTransferring ? null : _pickAndSendFile,
-              icon: const Icon(Icons.upload),
-              label: Text(_isTransferring ? 'Передача...' : 'Выбрать файл и отправить'),
-              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
-            ),
-            const SizedBox(height: 28),
-            LinearProgressIndicator(value: _progress, minHeight: 10),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('${(_progress * 100).toStringAsFixed(1)}%'),
-                Text('${_speedMBps.toStringAsFixed(1)} МБ/с', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(_status, style: const TextStyle(fontSize: 14)),
-          ],
-        ),
-      ),
-    );
-  }
-}
+  controller: _ipController,
+  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+  decoration: const InputDecoration(
+    labelText: 'IP-адрес приёмника',
+    hintText: 'Например, 172.20.10.1 или 192.168.1.50',
+    border: OutlineInputBorder(),
+  ),
+),
+const SizedBox(height: 8),
+Wrap(
+  spacing: 8,
+  runSpacing: 6,
+  children: [
+    ActionChip(
+      label: const Text('.'),
+      onPressed: () {
+        final text = _ipController.text;
+        _ipController.text = '$text.';
+        _ipController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _ipController.text.length),
+        );
+      },
+    ),
+    ActionChip(
+      label: const Text('192.168.1.'),
+      onPressed: () {
+        _ipController.text = '192.168.1.';
+        _ipController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _ipController.text.length),
+        );
+      },
+    ),
+    ActionChip(
+      label: const Text('172.20.10.1'),
+      onPressed: () {
+        _ipController.text = '172.20.10.1';
+        _ipController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _ipController.text.length),
+        );
+      },
+    ),
+  ],
+),
