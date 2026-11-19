@@ -22,7 +22,7 @@ void main() {
 class TransferHistoryItem {
   final String fileName;
   final int sizeBytes;
-  final String direction; // 'Принято' | 'Отправлено'
+  final String direction;
   final String savedPath;
   final DateTime timestamp;
 
@@ -499,7 +499,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
         InternetAddress.anyIPv4,
         kTransferPort,
         shared: true,
-        reuseAddress: true,
       );
       setState(() {
         _server = server;
@@ -833,7 +832,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Локальный IP
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -870,7 +868,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
             const SizedBox(height: 18),
 
-            // Компактные кнопки «Принять» и «Отправить» по центру
             Center(
               child: Wrap(
                 alignment: WrapAlignment.center,
@@ -897,7 +894,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
             const SizedBox(height: 18),
 
-            // Найденные устройства
             if (_peers.isNotEmpty) ...[
               Container(
                 padding: const EdgeInsets.all(12),
@@ -932,7 +928,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
               const SizedBox(height: 14),
             ],
 
-            // Поле IP
             TextField(
               controller: _ipController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -984,7 +979,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
             const SizedBox(height: 18),
 
-            // Скорость и прогресс
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -1108,7 +1102,6 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Тема: OLED чёрный / Белый
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Белый фон'),
@@ -1122,7 +1115,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const Divider(height: 28),
 
-          // Выбор папки сохранения
           const Text('Папка сохранения', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           TextField(
@@ -1167,7 +1159,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const Divider(height: 28),
 
-          // История передач
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
