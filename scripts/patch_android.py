@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 
-# 1. Разрешения в AndroidManifest.xml
 manifest = Path("android/app/src/main/AndroidManifest.xml")
 if manifest.exists():
     text = manifest.read_text(encoding="utf-8")
@@ -17,7 +16,6 @@ if manifest.exists():
         text = text.replace("<application", perms + "\n    <application", 1)
         manifest.write_text(text, encoding="utf-8")
 
-# 2. Обновляем Gradle wrapper до 8.9 (совместим со свежим JDK)
 wrapper = Path("android/gradle/wrapper/gradle-wrapper.properties")
 if wrapper.exists():
     w_text = wrapper.read_text(encoding="utf-8")
@@ -28,10 +26,16 @@ if wrapper.exists():
     )
     wrapper.write_text(w_text, encoding="utf-8")
 
-# 3. Обновляем AGP и Kotlin в settings.gradle (если используется declarative plugins)
 settings_gradle = Path("android/settings.gradle")
 if settings_gradle.exists():
     s_text = settings_gradle.read_text(encoding="utf-8")
     s_text = re.sub(r'id "com\.android\.application" version "[^"]+"', 'id "com.android.application" version "8.6.0"', s_text)
     s_text = re.sub(r'id "org\.jetbrains\.kotlin\.android" version "[^"]+"', 'id "org.jetbrains.kotlin.android" version "2.0.20"', s_text)
     settings_gradle.write_text(s_text, encoding="utf-8")
+
+for gradle_file in [Path("android/app/build.gradle"), Path("android/app/build.gradle.kts")]:
+    if gradle_file.exists():
+        g_text = gradle_file.read_text(encoding="utf-8")
+        g_text = re.sub(r"compileSdk\s*=?\s*(flutter\.compileSdkVersion|\d+)", "compileSdk = 35", g_text)
+        g_text = re.sub(r'ndkVersion\s*=?\s*(flutter\.ndkVersion|"[^"]+")', 'ndkVersion = "26.1.10909125"', g_text)
+        gradle_file.write_text(g_text, encoding="utf-8")
