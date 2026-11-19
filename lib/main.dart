@@ -452,6 +452,9 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   bool _isListening = false;
   bool _isTransferring = false;
+  bool _cancelRequested = false;
+  Socket? _activeSendSocket;
+  final List<OutgoingItem> _queuedItems = [];
 
   String _status = 'Готово · v$kAppVersion';
   String _currentFileName = '';
@@ -471,6 +474,169 @@ class _TransferHomePageState extends State<TransferHomePage> {
   void initState() {
     super.initState();
     _initEnvironment();
+  }
+  void _resetTransferCard({String? nextStatus}) {
+    setState(() {
+      _currentFileName = '';
+      _currentFileIndex = 0;
+      _totalFilesCount = 0;
+      _progress = 0.0;
+      _speedMBps = 0.0;
+      _transferredBytes = 0;
+      _totalBytes = 0;
+      _etaText = '--:--';
+      if (nextStatus != null) {
+        _status = nextStatus;
+      }
+    });
+  }
+
+  void _cancelTransfer() {
+    _cancelRequested = true;
+    try {
+      _activeSendSocket?.destroy();
+    } catch (_) {}
+    setState(() {
+      _status = 'Отмена передачи...';
+    });
+  }
+
+  void _removeQueuedItem(int index) {
+    if (_isTransferring || index < 0 || index >= _queuedItems.length) return;
+    setState(() {
+      _queuedItems.removeAt(index);
+      if (_queuedItems.isEmpty) {
+        _status = 'Очередь очищена';
+      }
+    });
+  }
+
+  void _clearQueuedItems() {
+    if (_isTransferring) return;
+    setState(() {
+      _queuedItems.clear();
+      _status = 'Готово · v$kAppVersion';
+    });
+  }
+
+  Future<void> _addFilesToQueue() async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withReadStream: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final added = <OutgoingItem>[];
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      final file = File(f.path!);
+      if (await file.exists()) {
+        final len = await file.length();
+        added.add(OutgoingItem(relativeName: f.name, sizeBytes: len, file: file));
+      }
+    }
+    if (added.isEmpty) return;
+
+    setState(() {
+      _queuedItems.addAll(added);
+      _status = 'Выбрано элементов: ${_queuedItems.length}';
+    });
+  }
+
+  Future<void> _addFolderToQueue() async {
+    final dirPath = await FilePicker.platform.getDirectoryPath();
+    if (dirPath == null || dirPath.trim().isEmpty) return;
+
+    final rootDir = Directory(dirPath);
+    if (!await rootDir.exists()) return;
+
+    final folderName = rootDir.uri.pathSegments.where((s) => s.isNotEmpty).lastOrNull ?? 'folder';
+    final normalizedRoot = rootDir.path.replaceAll('\\', '/');
+    final prefix = normalizedRoot.endsWith('/') ? normalizedRoot : '$normalizedRoot/';
+
+    final added = <OutgoingItem>[];
+    await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+      if (entity is File) {
+        final p = entity.path.replaceAll('\\', '/');
+        final rel = p.startsWith(prefix) ? p.substring(prefix.length) : entity.uri.pathSegments.last;
+        final len = await entity.length();
+        added.add(
+          OutgoingItem(
+            relativeName: '$folderName/$rel',
+            sizeBytes: len,
+            file: entity,
+          ),
+        );
+      }
+    }
+
+    if (added.isEmpty) {
+      setState(() => _status = 'Выбранная папка пуста');
+      return;
+    }
+
+    setState(() {
+      _queuedItems.addAll(added);
+      _status = 'Добавлено из папки: ${added.length}';
+    });
+  }
+
+  Future<void> _startSendingQueue() async {
+    _hideKeyboard();
+    if (_isTransferring) return;
+
+    final host = _ipController.text.trim();
+    if (host.isEmpty) {
+      setState(() => _status = 'Укажите IP получателя — очередь сохранена');
+      return;
+    }
+
+    if (_queuedItems.isEmpty) {
+      await _openSendMenu();
+      return;
+    }
+
+    final snapshot = List<OutgoingItem>.from(_queuedItems);
+    _cancelRequested = false;
+
+    setState(() {
+      _isTransferring = true;
+      _totalFilesCount = snapshot.length;
+    });
+
+    final sentItems = <OutgoingItem>[];
+
+    try {
+      for (int i = 0; i < snapshot.length; i++) {
+        if (_cancelRequested) {
+          throw Exception('Передача отменена');
+        }
+        setState(() => _currentFileIndex = i + 1);
+        await _sendSingleItem(host, snapshot[i]);
+        sentItems.add(snapshot[i]);
+      }
+
+      setState(() {
+        _queuedItems.removeWhere((item) => sentItems.contains(item));
+        _progress = 1.0;
+        _speedMBps = 0.0;
+        _etaText = '00:00';
+        _status = sentItems.length == 1 ? 'Файл отправлен' : 'Отправлено элементов: ${sentItems.length}';
+      });
+    } catch (e) {
+      setState(() {
+        _queuedItems.removeWhere((item) => sentItems.contains(item));
+        _speedMBps = 0.0;
+        _status = _cancelRequested ? 'Передача отменена' : 'Ошибка отправки: $e';
+      });
+    } finally {
+      _activeSendSocket = null;
+      _cancelRequested = false;
+      setState(() {
+        _isTransferring = false;
+        _totalFilesCount = 0;
+      });
+    }
   }
 
   void _hideKeyboard() {
@@ -1377,16 +1543,96 @@ class _TransferHomePageState extends State<TransferHomePage> {
               ),
 
               const SizedBox(height: 16),
+              if (_queuedItems.isNotEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: cardBg,
+                    borderRadius: kPillRadius,
+                    border: Border.all(color: cardBorder),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'ВЫБРАНО (${_queuedItems.length})',
+                            style: TextStyle(fontSize: 11, color: subtle, fontWeight: FontWeight.w600),
+                          ),
+                          Row(
+                            children: [
+                              TextButton.icon(
+                                onPressed: _isTransferring ? null : _openSendMenu,
+                                icon: const Icon(Icons.add_rounded, size: 18),
+                                label: const Text('Добавить'),
+                              ),
+                              if (!_isTransferring)
+                                TextButton(
+                                  onPressed: _clearQueuedItems,
+                                  child: const Text('Очистить'),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      ...List.generate(_queuedItems.length, (index) {
+                        final item = _queuedItems[index];
+                        return ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(Icons.insert_drive_file_rounded, size: 18, color: fg),
+                          title: Text(
+                            item.relativeName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                          ),
+                          subtitle: Text(
+                            _formatSize(item.sizeBytes),
+                            style: TextStyle(fontSize: 11, color: subtle, fontFamily: 'monospace'),
+                          ),
+                          trailing: _isTransferring
+                              ? null
+                              : IconButton(
+                                  icon: const Icon(Icons.close_rounded, size: 18),
+                                  tooltip: 'Удалить из списка',
+                                  onPressed: () => _removeQueuedItem(index),
+                                ),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
 
-              Center(
-                child: LiquidGlassButton(
-                  label: 'Отправить',
-                  icon: Icons.upload_rounded,
-                  active: _isTransferring,
-                  isWhiteTheme: isWhite,
-                  onPressed: _isTransferring ? null : _openSendMenu,
+                            Center(
+                child: Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    LiquidGlassButton(
+                      label: _queuedItems.isEmpty ? 'Отправить' : 'Отправить (${_queuedItems.length})',
+                      icon: Icons.upload_rounded,
+                      active: _isTransferring,
+                      isWhiteTheme: isWhite,
+                      onPressed: _isTransferring ? null : _startSendingQueue,
+                    ),
+                    if (_isTransferring)
+                      LiquidGlassButton(
+                        label: 'Отмена',
+                        icon: Icons.close_rounded,
+                        active: true,
+                        isWhiteTheme: isWhite,
+                        onPressed: _cancelTransfer,
+                      ),
+                  ],
                 ),
               ),
+
 
               const SizedBox(height: 16),
 
