@@ -9,7 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 const int kTransferPort = 49152;
-const int kChunkSize = 1024 * 1024; // 1 MB buffer for high throughput
+const int kChunkSize = 1024 * 1024;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -93,7 +93,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
     return await getApplicationDocumentsDirectory();
   }
 
-  // ================= ПРИЁМНИК (SERVER) =================
   Future<void> _toggleServer() async {
     if (_isListening) {
       await _server?.close();
@@ -129,7 +128,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
   }
 
   Future<void> _handleIncomingClient(Socket client) async {
-    // Увеличиваем системный буфер приёма
     client.setOption(SocketOption.tcpNoDelay, true);
 
     final saveDir = await _getSaveDirectory();
@@ -151,13 +149,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
         if (!headerParsed) {
           headerBuffer.add(data);
           final bytes = headerBuffer.toBytes();
-          final newlineIndex = bytes.indexOf(10); // '\n'
+          final newlineIndex = bytes.indexOf(10);
           if (newlineIndex == -1) {
             continue;
           }
 
           final headerLine = utf8.decode(bytes.sublist(0, newlineIndex)).trim();
-          // Формат заголовка: filename|totalSize
           final parts = headerLine.split('|');
           if (parts.length < 2) {
             throw Exception('Некорректный заголовок: $headerLine');
@@ -170,7 +167,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
           raf = await outFile.open(mode: FileMode.writeOnlyAppend);
           receivedBytes = await raf.length();
 
-          // Отправляем отправителю текущее смещение для докачки
           client.write('$receivedBytes\n');
           await client.flush();
 
@@ -178,7 +174,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
           offset = newlineIndex + 1;
 
           setState(() {
-            _status = 'Приём: $fileName (с ${ (receivedBytes / (1024 * 1024)).toStringAsFixed(1) } МБ)';
+            _status = 'Приём: $fileName (с ${(receivedBytes / (1024 * 1024)).toStringAsFixed(1)} МБ)';
           });
         }
 
@@ -221,7 +217,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
     }
   }
 
-  // ================= ОТПРАВИТЕЛЬ (CLIENT) =================
   Future<void> _pickAndSendFile() async {
     if (_isTransferring) return;
 
@@ -267,11 +262,9 @@ class _TransferHomePageState extends State<TransferHomePage> {
       );
       socket.setOption(SocketOption.tcpNoDelay, true);
 
-      // Отправляем метаданные
       socket.write('$fileName|$totalSize\n');
       await socket.flush();
 
-      // Ждём от приёмника offset (сколько байт уже есть для докачки)
       final completer = Completer<int>();
       final respBuilder = BytesBuilder(copy: false);
 
@@ -316,7 +309,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
         if (buffer.isEmpty) break;
 
         socket.add(buffer);
-        // Следим за буфером сокета, чтобы не раздуть RAM на больших файлах
         await socket.flush();
 
         sentBytes += buffer.length;
@@ -347,7 +339,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
       });
     } catch (e) {
       await raf?.close();
-      await socket?.destroy();
+      socket?.destroy();
       setState(() => _status = 'Ошибка отправки: $e');
     } finally {
       setState(() => _isTransferring = false);
