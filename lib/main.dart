@@ -1401,4 +1401,217 @@ class _TransferHomePageState extends State<TransferHomePage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
-                      
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '${_speedMBps.toStringAsFixed(1)} МБ/с',
+                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: accent),
+                        ),
+                        Text(
+                          _etaText,
+                          style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: subtle),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: kPillRadius,
+                      child: LinearProgressIndicator(
+                        value: _progress,
+                        minHeight: 8,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('${(_progress * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12)),
+                        Text(
+                          '${_formatSize(_transferredBytes)} / ${_formatSize(_totalBytes)}',
+                          style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: subtle),
+                        ),
+                      ],
+                    ),
+                    if (_currentFileName.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        _currentFileName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: subtle),
+                      ),
+                    ],
+                    const SizedBox(height: 6),
+                    Text(_status, style: const TextStyle(fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SettingsPage extends StatefulWidget {
+  final AppSettings settings;
+  final ValueChanged<bool> onThemeChanged;
+  final ValueChanged<String?> onSaveDirChanged;
+  final Future<void> Function() onClearHistory;
+
+  const SettingsPage({
+    super.key,
+    required this.settings,
+    required this.onThemeChanged,
+    required this.onSaveDirChanged,
+    required this.onClearHistory,
+  });
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  late TextEditingController _dirController;
+  late bool _whiteTheme;
+
+  @override
+  void initState() {
+    super.initState();
+    _whiteTheme = widget.settings.isWhiteTheme;
+    _dirController = TextEditingController(text: widget.settings.customSaveDir ?? '');
+  }
+
+  @override
+  void dispose() {
+    _dirController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickFolder() async {
+    try {
+      final selected = await FilePicker.platform.getDirectoryPath();
+      if (selected != null && selected.isNotEmpty) {
+        _dirController.text = selected;
+        widget.onSaveDirChanged(selected);
+        setState(() {});
+      }
+    } catch (_) {}
+  }
+
+  String _formatBytes(int b) {
+    if (b <= 0) return '0 Б';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} КБ';
+    if (b < 1024 * 1024 * 1024) return '${(b / (1024 * 1024)).toStringAsFixed(2)} МБ';
+    return '${(b / (1024 * 1024 * 1024)).toStringAsFixed(2)} ГБ';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final history = widget.settings.history;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Настройки · v$kAppVersion')),
+      body: ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: const EdgeInsets.all(16),
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Белый фон'),
+            subtitle: Text(_whiteTheme ? 'Включён белый фон' : 'Включён OLED-чёрный фон'),
+            value: _whiteTheme,
+            onChanged: (val) {
+              setState(() => _whiteTheme = val);
+              widget.onThemeChanged(val);
+            },
+          ),
+
+          const Divider(height: 28),
+
+          const Text('Папка сохранения', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _dirController,
+            decoration: InputDecoration(
+              hintText: 'По умолчанию (Download / Documents)',
+              border: OutlineInputBorder(borderRadius: kPillRadius),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.folder_open_rounded),
+                onPressed: _pickFolder,
+              ),
+            ),
+            onSubmitted: (val) => widget.onSaveDirChanged(val.trim().isEmpty ? null : val.trim()),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              ActionChip(
+                label: const Text('Выбрать папку'),
+                onPressed: _pickFolder,
+              ),
+              if (Platform.isAndroid)
+                ActionChip(
+                  label: const Text('/storage/emulated/0/Download'),
+                  onPressed: () {
+                    const p = '/storage/emulated/0/Download';
+                    _dirController.text = p;
+                    widget.onSaveDirChanged(p);
+                  },
+                ),
+              ActionChip(
+                label: const Text('По умолчанию'),
+                onPressed: () {
+                  _dirController.clear();
+                  widget.onSaveDirChanged(null);
+                },
+              ),
+            ],
+          ),
+
+          const Divider(height: 28),
+
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('История (${history.length})', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+              if (history.isNotEmpty)
+                TextButton(
+                  onPressed: () async {
+                    await widget.onClearHistory();
+                    setState(() {});
+                  },
+                  child: const Text('Очистить'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (history.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text('История пока пуста', style: TextStyle(color: Colors.grey)),
+            )
+          else
+            ...history.map((item) {
+              final dt = '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}';
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  item.direction == 'Принято' ? Icons.download_done_rounded : Icons.check_circle_outline_rounded,
+                ),
+                title: Text(item.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  '${item.direction} · ${_formatBytes(item.sizeBytes)} · $dt',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+}
