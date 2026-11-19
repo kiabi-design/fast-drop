@@ -109,7 +109,9 @@ class _TransferHomePageState extends State<TransferHomePage> {
       final server = await ServerSocket.bind(
         InternetAddress.anyIPv4,
         kTransferPort,
-        shared: true,
+        shared: true, 
+        reuseAddress: true
+
       );
       setState(() {
         _server = server;
