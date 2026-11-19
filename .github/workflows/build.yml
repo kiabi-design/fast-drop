@@ -9,47 +9,27 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Backup custom files
         run: |
           mkdir -p /tmp/fast_drop_backup
           cp pubspec.yaml /tmp/fast_drop_backup/pubspec.yaml
           cp lib/main.dart /tmp/fast_drop_backup/main.dart
+          cp scripts/patch_android.py /tmp/fast_drop_backup/patch_android.py
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Generate Android & iOS project scaffolding
+      - name: Generate Android & iOS project
         run: |
           flutter create --org com.fastdrop --project-name fast_drop .
           cp /tmp/fast_drop_backup/pubspec.yaml pubspec.yaml
           mkdir -p lib
           cp /tmp/fast_drop_backup/main.dart lib/main.dart
-
-      - name: Configure Android permissions
-        run: |
-          python3 -c '
-          p = "android/app/src/main/AndroidManifest.xml"
-          with open(p, "r", encoding="utf-8") as f:
-              content = f.read()
-          perms = """
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
-"""
-          if "MANAGE_EXTERNAL_STORAGE" not in content:
-              content = content.replace("<application", perms + "\n    <application", 1)
-          with open(p, "w", encoding="utf-8") as f:
-              f.write(content)
-          '
+          python3 /tmp/fast_drop_backup/patch_android.py
 
       - name: Install dependencies
         run: flutter pub get
@@ -66,14 +46,12 @@ jobs:
           cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
           cd build/ios/ipa && zip -r ../../FastDrop-unsigned.ipa Payload
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
           path: build/FastDrop-unsigned.ipa
