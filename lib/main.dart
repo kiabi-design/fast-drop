@@ -2,13 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 const int kTransferPort = 49152;
+const int kDiscoveryPort = 49153;
 const int kChunkSize = 1024 * 1024;
 
 void main() {
@@ -16,22 +19,303 @@ void main() {
   runApp(const FastDropApp());
 }
 
-class FastDropApp extends StatelessWidget {
+class TransferHistoryItem {
+  final String fileName;
+  final int sizeBytes;
+  final String direction; // 'Принято' | 'Отправлено'
+  final String savedPath;
+  final DateTime timestamp;
+
+  TransferHistoryItem({
+    required this.fileName,
+    required this.sizeBytes,
+    required this.direction,
+    required this.savedPath,
+    required this.timestamp,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'fileName': fileName,
+        'sizeBytes': sizeBytes,
+        'direction': direction,
+        'savedPath': savedPath,
+        'timestamp': timestamp.toIso8601String(),
+      };
+
+  factory TransferHistoryItem.fromJson(Map<String, dynamic> json) {
+    return TransferHistoryItem(
+      fileName: json['fileName'] as String? ?? 'file',
+      sizeBytes: json['sizeBytes'] as int? ?? 0,
+      direction: json['direction'] as String? ?? 'Принято',
+      savedPath: json['savedPath'] as String? ?? '',
+      timestamp: DateTime.tryParse(json['timestamp'] as String? ?? '') ?? DateTime.now(),
+    );
+  }
+}
+
+class DiscoveredPeer {
+  final String ip;
+  final String name;
+  DateTime lastSeen;
+
+  DiscoveredPeer({
+    required this.ip,
+    required this.name,
+    required this.lastSeen,
+  });
+}
+
+class AppSettings {
+  bool isWhiteTheme;
+  String? customSaveDir;
+  List<TransferHistoryItem> history;
+
+  AppSettings({
+    this.isWhiteTheme = false,
+    this.customSaveDir,
+    List<TransferHistoryItem>? history,
+  }) : history = history ?? [];
+}
+
+class SettingsStorage {
+  static Future<File> _configFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/fastdrop_settings.json');
+  }
+
+  static Future<AppSettings> load() async {
+    try {
+      final file = await _configFile();
+      if (!await file.exists()) return AppSettings();
+      final raw = await file.readAsString();
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final histRaw = (data['history'] as List<dynamic>? ?? [])
+          .map((e) => TransferHistoryItem.fromJson(e as Map<String, dynamic>))
+          .toList();
+      return AppSettings(
+        isWhiteTheme: data['isWhiteTheme'] as bool? ?? false,
+        customSaveDir: data['customSaveDir'] as String?,
+        history: histRaw,
+      );
+    } catch (_) {
+      return AppSettings();
+    }
+  }
+
+  static Future<void> save(AppSettings settings) async {
+    try {
+      final file = await _configFile();
+      final payload = {
+        'isWhiteTheme': settings.isWhiteTheme,
+        'customSaveDir': settings.customSaveDir,
+        'history': settings.history.map((e) => e.toJson()).toList(),
+      };
+      await file.writeAsString(jsonEncode(payload), flush: true);
+    } catch (_) {}
+  }
+}
+
+class FastDropApp extends StatefulWidget {
   const FastDropApp({super.key});
 
   @override
+  State<FastDropApp> createState() => _FastDropAppState();
+}
+
+class _FastDropAppState extends State<FastDropApp> {
+  final AppSettings _settings = AppSettings();
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final loaded = await SettingsStorage.load();
+    setState(() {
+      _settings.isWhiteTheme = loaded.isWhiteTheme;
+      _settings.customSaveDir = loaded.customSaveDir;
+      _settings.history
+        ..clear()
+        ..addAll(loaded.history);
+      _loaded = true;
+    });
+  }
+
+  Future<void> _updateTheme(bool whiteTheme) async {
+    setState(() => _settings.isWhiteTheme = whiteTheme);
+    await SettingsStorage.save(_settings);
+  }
+
+  Future<void> _updateSaveDir(String? path) async {
+    setState(() => _settings.customSaveDir = path);
+    await SettingsStorage.save(_settings);
+  }
+
+  Future<void> _addHistory(TransferHistoryItem item) async {
+    setState(() {
+      _settings.history.insert(0, item);
+      if (_settings.history.length > 100) {
+        _settings.history.removeRange(100, _settings.history.length);
+      }
+    });
+    await SettingsStorage.save(_settings);
+  }
+
+  Future<void> _clearHistory() async {
+    setState(() => _settings.history.clear());
+    await SettingsStorage.save(_settings);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isWhite = _settings.isWhiteTheme;
+    final bg = isWhite ? const Color(0xFFFFFFFF) : const Color(0xFF000000);
+    final surface = isWhite ? const Color(0xFFF4F5F7) : const Color(0xFF0B0B0D);
+    final fg = isWhite ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
+
     return MaterialApp(
-      title: 'FastDrop Wi-Fi',
+      title: 'FastDrop',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true),
-      home: const TransferHomePage(),
+      theme: ThemeData(
+        brightness: isWhite ? Brightness.light : Brightness.dark,
+        scaffoldBackgroundColor: bg,
+        colorScheme: ColorScheme(
+          brightness: isWhite ? Brightness.light : Brightness.dark,
+          primary: fg,
+          onPrimary: bg,
+          secondary: isWhite ? const Color(0xFF007AFF) : const Color(0xFF5CE1E6),
+          onSecondary: Colors.black,
+          error: Colors.redAccent,
+          onError: Colors.white,
+          surface: surface,
+          onSurface: fg,
+        ),
+        useMaterial3: true,
+      ),
+      home: !_loaded
+          ? Scaffold(backgroundColor: bg, body: const Center(child: CircularProgressIndicator()))
+          : TransferHomePage(
+              settings: _settings,
+              onThemeChanged: _updateTheme,
+              onSaveDirChanged: _updateSaveDir,
+              onAddHistory: _addHistory,
+              onClearHistory: _clearHistory,
+            ),
+    );
+  }
+}
+
+class LiquidGlassButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool active;
+  final bool isWhiteTheme;
+  final VoidCallback? onPressed;
+
+  const LiquidGlassButton({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.isWhiteTheme,
+    required this.onPressed,
+    this.active = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isIos = Platform.isIOS;
+    final accent = isWhiteTheme ? const Color(0xFF007AFF) : const Color(0xFF64D2FF);
+    final textColor = active
+        ? accent
+        : (isWhiteTheme ? const Color(0xFF0A0A0A) : Colors.white);
+
+    final glassFill = isWhiteTheme
+        ? Colors.white.withOpacity(active ? 0.85 : 0.65)
+        : Colors.white.withOpacity(active ? 0.18 : 0.09);
+
+    final borderColor = active
+        ? accent.withOpacity(0.75)
+        : (isWhiteTheme
+            ? Colors.black.withOpacity(0.14)
+            : Colors.white.withOpacity(0.24));
+
+    final content = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+      decoration: BoxDecoration(
+        color: glassFill,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: borderColor, width: 1.1),
+        boxShadow: isIos
+            ? [
+                BoxShadow(
+                  color: active
+                      ? accent.withOpacity(0.22)
+                      : (isWhiteTheme
+                          ? Colors.black.withOpacity(0.08)
+                          : Colors.black.withOpacity(0.55)),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ]
+            : null,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: textColor),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final wrapped = isIos
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: content,
+            ),
+          )
+        : content;
+
+    return Opacity(
+      opacity: onPressed == null ? 0.45 : 1.0,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: onPressed,
+        child: wrapped,
+      ),
     );
   }
 }
 
 class TransferHomePage extends StatefulWidget {
-  const TransferHomePage({super.key});
+  final AppSettings settings;
+  final ValueChanged<bool> onThemeChanged;
+  final ValueChanged<String?> onSaveDirChanged;
+  final ValueChanged<TransferHistoryItem> onAddHistory;
+  final Future<void> Function() onClearHistory;
+
+  const TransferHomePage({
+    super.key,
+    required this.settings,
+    required this.onThemeChanged,
+    required this.onSaveDirChanged,
+    required this.onAddHistory,
+    required this.onClearHistory,
+  });
 
   @override
   State<TransferHomePage> createState() => _TransferHomePageState();
@@ -41,13 +325,26 @@ class _TransferHomePageState extends State<TransferHomePage> {
   final TextEditingController _ipController = TextEditingController(text: '172.20.10.1');
 
   ServerSocket? _server;
+  RawDatagramSocket? _udpSocket;
+  Timer? _beaconTimer;
+  Timer? _cleanupTimer;
+
   bool _isListening = false;
   bool _isTransferring = false;
 
-  String _status = 'Готов к работе';
+  String _status = 'Готово';
+  String _currentFileName = '';
+  int _currentFileIndex = 0;
+  int _totalFilesCount = 0;
+
   double _progress = 0.0;
   double _speedMBps = 0.0;
-  String _localIps = 'Определяется...';
+  int _transferredBytes = 0;
+  int _totalBytes = 0;
+  String _etaText = '--:--';
+
+  List<String> _myIps = [];
+  final Map<String, DiscoveredPeer> _peers = {};
 
   @override
   void initState() {
@@ -63,6 +360,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
       ].request();
     }
     await _refreshLocalIps();
+    await _startUdpRadar();
   }
 
   Future<void> _refreshLocalIps() async {
@@ -74,18 +372,88 @@ class _TransferHomePageState extends State<TransferHomePage> {
       final ips = <String>[];
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
-          ips.add('${iface.name}: ${addr.address}');
+          ips.add(addr.address);
         }
       }
-      setState(() {
-        _localIps = ips.isEmpty ? 'Нет активного IPv4' : ips.join(' | ');
-      });
-    } catch (e) {
-      setState(() => _localIps = 'Ошибка IP: $e');
-    }
+      if (mounted) {
+        setState(() => _myIps = ips);
+      }
+    } catch (_) {}
   }
 
-  Future<Directory> _getSaveDirectory() async {
+  Future<void> _startUdpRadar() async {
+    try {
+      _udpSocket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        kDiscoveryPort,
+        reuseAddress: true,
+      );
+      _udpSocket!.broadcastEnabled = true;
+
+      _udpSocket!.listen((RawSocketEvent event) {
+        if (event == RawSocketEvent.read) {
+          final dg = _udpSocket!.receive();
+          if (dg == null) return;
+          final msg = utf8.decode(dg.data, allowMalformed: true).trim();
+          if (msg.startsWith('FASTDROP_READY|')) {
+            final senderIp = dg.address.address;
+            if (_myIps.contains(senderIp)) return;
+            final label = msg.substring('FASTDROP_READY|'.length);
+            if (mounted) {
+              setState(() {
+                _peers[senderIp] = DiscoveredPeer(
+                  ip: senderIp,
+                  name: label.isEmpty ? 'Устройство' : label,
+                  lastSeen: DateTime.now(),
+                );
+              });
+            }
+          }
+        }
+      });
+
+      _cleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        final now = DateTime.now();
+        if (mounted) {
+          setState(() {
+            _peers.removeWhere((_, p) => now.difference(p.lastSeen).inSeconds > 5);
+          });
+        }
+      });
+    } catch (_) {}
+  }
+
+  void _startBroadcastingPresence() {
+    _beaconTimer?.cancel();
+    final osName = Platform.isIOS ? 'iPhone' : (Platform.isAndroid ? 'Android' : 'Device');
+    final payload = utf8.encode('FASTDROP_READY|$osName');
+
+    _beaconTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_udpSocket == null || !_isListening) return;
+      try {
+        _udpSocket!.send(payload, InternetAddress('255.255.255.255'), kDiscoveryPort);
+      } catch (_) {}
+      for (final ip in _myIps) {
+        final parts = ip.split('.');
+        if (parts.length == 4) {
+          final bcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+          try {
+            _udpSocket!.send(payload, InternetAddress(bcast), kDiscoveryPort);
+          } catch (_) {}
+        }
+      }
+    });
+  }
+
+  Future<Directory> _resolveSaveDirectory() async {
+    final custom = widget.settings.customSaveDir;
+    if (custom != null && custom.trim().isNotEmpty) {
+      final dir = Directory(custom.trim());
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      return dir;
+    }
     if (Platform.isAndroid) {
       final downloads = Directory('/storage/emulated/0/Download');
       if (await downloads.exists()) return downloads;
@@ -93,8 +461,29 @@ class _TransferHomePageState extends State<TransferHomePage> {
     return await getApplicationDocumentsDirectory();
   }
 
-  Future<void> _toggleServer() async {
+  String _formatSize(int bytes) {
+    if (bytes <= 0) return '0 Б';
+    const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+    double v = bytes.toDouble();
+    int i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return '${v.toStringAsFixed(i >= 2 ? 2 : 0)} ${units[i]}';
+  }
+
+  String _formatEta(int remainingBytes, double speedMBps) {
+    if (speedMBps <= 0.05 || remainingBytes <= 0) return '--:--';
+    final sec = (remainingBytes / (speedMBps * 1024 * 1024)).round();
+    final m = (sec ~/ 60).toString().padLeft(2, '0');
+    final s = (sec % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  Future<void> _toggleReceive() async {
     if (_isListening) {
+      _beaconTimer?.cancel();
       await _server?.close();
       setState(() {
         _server = null;
@@ -109,38 +498,37 @@ class _TransferHomePageState extends State<TransferHomePage> {
       final server = await ServerSocket.bind(
         InternetAddress.anyIPv4,
         kTransferPort,
-        shared: true, 
-        reuseAddress: true
-
+        shared: true,
+        reuseAddress: true,
       );
       setState(() {
         _server = server;
         _isListening = true;
-        _status = 'Жду подключение на порту $kTransferPort...';
+        _status = 'Ожидание подключения (порт $kTransferPort)';
         _progress = 0.0;
         _speedMBps = 0.0;
       });
+      _startBroadcastingPresence();
 
       server.listen((Socket client) async {
         await _handleIncomingClient(client);
       });
     } catch (e) {
-      setState(() => _status = 'Ошибка запуска приёмника: $e');
+      setState(() => _status = 'Ошибка приёма: $e');
     }
   }
 
   Future<void> _handleIncomingClient(Socket client) async {
     client.setOption(SocketOption.tcpNoDelay, true);
+    final saveDir = await _resolveSaveDirectory();
 
-    final saveDir = await _getSaveDirectory();
     RandomAccessFile? raf;
     String fileName = 'received_file';
     int totalSize = 0;
     int receivedBytes = 0;
     bool headerParsed = false;
-    BytesBuilder headerBuffer = BytesBuilder(copy: false);
+    final headerBuffer = BytesBuilder(copy: false);
 
-    final stopwatch = Stopwatch()..start();
     int bytesInInterval = 0;
     DateTime lastSpeedUpdate = DateTime.now();
 
@@ -151,15 +539,13 @@ class _TransferHomePageState extends State<TransferHomePage> {
         if (!headerParsed) {
           headerBuffer.add(data);
           final bytes = headerBuffer.toBytes();
-          final newlineIndex = bytes.indexOf(10);
-          if (newlineIndex == -1) {
-            continue;
-          }
+          final nl = bytes.indexOf(10);
+          if (nl == -1) continue;
 
-          final headerLine = utf8.decode(bytes.sublist(0, newlineIndex)).trim();
+          final headerLine = utf8.decode(bytes.sublist(0, nl)).trim();
           final parts = headerLine.split('|');
           if (parts.length < 2) {
-            throw Exception('Некорректный заголовок: $headerLine');
+            throw Exception('Некорректный заголовок');
           }
 
           fileName = parts[0].replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
@@ -173,10 +559,13 @@ class _TransferHomePageState extends State<TransferHomePage> {
           await client.flush();
 
           headerParsed = true;
-          offset = newlineIndex + 1;
+          offset = nl + 1;
 
           setState(() {
-            _status = 'Приём: $fileName (с ${(receivedBytes / (1024 * 1024)).toStringAsFixed(1)} МБ)';
+            _currentFileName = fileName;
+            _totalBytes = totalSize;
+            _transferredBytes = receivedBytes;
+            _status = 'Приём: $fileName';
           });
         }
 
@@ -188,15 +577,17 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
           final now = DateTime.now();
           final elapsedMs = now.difference(lastSpeedUpdate).inMilliseconds;
-          if (elapsedMs >= 250 || receivedBytes >= totalSize) {
+          if (elapsedMs >= 200 || receivedBytes >= totalSize) {
             final sec = elapsedMs > 0 ? elapsedMs / 1000.0 : 0.001;
             final speed = (bytesInInterval / (1024 * 1024)) / sec;
             bytesInInterval = 0;
             lastSpeedUpdate = now;
 
             setState(() {
+              _transferredBytes = receivedBytes;
               _progress = totalSize > 0 ? (receivedBytes / totalSize).clamp(0.0, 1.0) : 0.0;
               _speedMBps = speed;
+              _etaText = _formatEta(totalSize - receivedBytes, speed);
             });
           }
         }
@@ -204,12 +595,23 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
       await raf?.flush();
       await raf?.close();
-      stopwatch.stop();
+
+      final fullPath = '${saveDir.path}/$fileName';
+      widget.onAddHistory(
+        TransferHistoryItem(
+          fileName: fileName,
+          sizeBytes: receivedBytes > 0 ? receivedBytes : totalSize,
+          direction: 'Принято',
+          savedPath: fullPath,
+          timestamp: DateTime.now(),
+        ),
+      );
 
       setState(() {
         _progress = 1.0;
         _speedMBps = 0.0;
-        _status = 'Готово! Сохранено: ${saveDir.path}/$fileName';
+        _etaText = '00:00';
+        _status = 'Сохранено: $fullPath';
       });
     } catch (e) {
       await raf?.close();
@@ -219,38 +621,67 @@ class _TransferHomePageState extends State<TransferHomePage> {
     }
   }
 
-  Future<void> _pickAndSendFile() async {
+  Future<void> _pickAndSendFiles() async {
     if (_isTransferring) return;
 
     final host = _ipController.text.trim();
     if (host.isEmpty) {
-      setState(() => _status = 'Укажи IP-адрес приёмника');
+      setState(() => _status = 'Укажите IP получателя');
       return;
     }
 
     final result = await FilePicker.platform.pickFiles(
-      allowMultiple: false,
+      allowMultiple: true,
       withReadStream: false,
     );
+    if (result == null || result.files.isEmpty) return;
 
-    if (result == null || result.files.single.path == null) {
-      return;
+    final files = result.files
+        .where((f) => f.path != null)
+        .map((f) => File(f.path!))
+        .toList();
+    if (files.isEmpty) return;
+
+    setState(() {
+      _isTransferring = true;
+      _totalFilesCount = files.length;
+    });
+
+    try {
+      for (int i = 0; i < files.length; i++) {
+        final f = files[i];
+        if (!await f.exists()) continue;
+        setState(() => _currentFileIndex = i + 1);
+        await _sendSingleFile(host, f);
+      }
+
+      setState(() {
+        _progress = 1.0;
+        _speedMBps = 0.0;
+        _etaText = '00:00';
+        _status = 'Отправка завершена';
+      });
+    } catch (e) {
+      setState(() => _status = 'Ошибка отправки: $e');
+    } finally {
+      setState(() {
+        _isTransferring = false;
+        _totalFilesCount = 0;
+      });
     }
+  }
 
-    final file = File(result.files.single.path!);
-    if (!await file.exists()) {
-      setState(() => _status = 'Файл недоступен');
-      return;
-    }
-
+  Future<void> _sendSingleFile(String host, File file) async {
     final fileName = file.uri.pathSegments.last;
     final totalSize = await file.length();
 
     setState(() {
-      _isTransferring = true;
-      _status = 'Подключение к $host:$kTransferPort...';
+      _currentFileName = fileName;
+      _totalBytes = totalSize;
+      _transferredBytes = 0;
       _progress = 0.0;
       _speedMBps = 0.0;
+      _status = 'Отправка ($_currentFileIndex/$_totalFilesCount)';
     });
 
     Socket? socket;
@@ -300,10 +731,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
       int bytesInInterval = 0;
       DateTime lastSpeedUpdate = DateTime.now();
 
-      setState(() {
-        _status = 'Отправка: $fileName';
-      });
-
       while (sentBytes < totalSize) {
         final remaining = totalSize - sentBytes;
         final toRead = remaining < kChunkSize ? remaining : kChunkSize;
@@ -318,15 +745,17 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
         final now = DateTime.now();
         final elapsedMs = now.difference(lastSpeedUpdate).inMilliseconds;
-        if (elapsedMs >= 250 || sentBytes >= totalSize) {
+        if (elapsedMs >= 200 || sentBytes >= totalSize) {
           final sec = elapsedMs > 0 ? elapsedMs / 1000.0 : 0.001;
           final speed = (bytesInInterval / (1024 * 1024)) / sec;
           bytesInInterval = 0;
           lastSpeedUpdate = now;
 
           setState(() {
+            _transferredBytes = sentBytes;
             _progress = totalSize > 0 ? (sentBytes / totalSize).clamp(0.0, 1.0) : 0.0;
             _speedMBps = speed;
+            _etaText = _formatEta(totalSize - sentBytes, speed);
           });
         }
       }
@@ -334,22 +763,40 @@ class _TransferHomePageState extends State<TransferHomePage> {
       await raf.close();
       await socket.close();
 
-      setState(() {
-        _progress = 1.0;
-        _speedMBps = 0.0;
-        _status = 'Отправка завершена: $fileName';
-      });
+      widget.onAddHistory(
+        TransferHistoryItem(
+          fileName: fileName,
+          sizeBytes: totalSize,
+          direction: 'Отправлено',
+          savedPath: host,
+          timestamp: DateTime.now(),
+        ),
+      );
     } catch (e) {
       await raf?.close();
       socket?.destroy();
-      setState(() => _status = 'Ошибка отправки: $e');
-    } finally {
-      setState(() => _isTransferring = false);
+      rethrow;
     }
+  }
+
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SettingsPage(
+          settings: widget.settings,
+          onThemeChanged: widget.onThemeChanged,
+          onSaveDirChanged: widget.onSaveDirChanged,
+          onClearHistory: widget.onClearHistory,
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
+    _beaconTimer?.cancel();
+    _cleanupTimer?.cancel();
+    _udpSocket?.close();
     _ipController.dispose();
     _server?.close();
     super.dispose();
@@ -357,84 +804,408 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final isWhite = widget.settings.isWhiteTheme;
+    final fg = isWhite ? const Color(0xFF0A0A0A) : Colors.white;
+    final subtle = isWhite ? Colors.black54 : Colors.white60;
+    final cardBorder = isWhite ? Colors.black12 : Colors.white12;
+    final cardBg = isWhite ? const Color(0xFFF6F7F9) : const Color(0xFF0A0A0C);
+    final accent = isWhite ? const Color(0xFF007AFF) : const Color(0xFF64D2FF);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('FastDrop TCP (Wi-Fi 5GHz)'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.settings_rounded, color: fg),
+          tooltip: 'Настройки',
+          onPressed: _openSettings,
+        ),
         actions: [
           IconButton(
-            onPressed: _refreshLocalIps,
-            icon: const Icon(Icons.refresh),
+            icon: Icon(Icons.refresh_rounded, color: fg),
             tooltip: 'Обновить IP',
+            onPressed: _refreshLocalIps,
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Card(
-              child: Padding(
+            // Локальный IP
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: cardBg,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('МОЙ IP', style: TextStyle(fontSize: 11, color: subtle, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  if (_myIps.isEmpty)
+                    Text('Нет сети', style: TextStyle(color: subtle, fontSize: 13))
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: _myIps.map((ip) {
+                        return ActionChip(
+                          label: Text(ip, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: ip));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Скопировано: $ip'), duration: const Duration(seconds: 1)),
+                            );
+                          },
+                        );
+                      }).toList(),
+                    ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 18),
+
+            // Компактные кнопки «Принять» и «Отправить» по центру
+            Center(
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 10,
+                children: [
+                  LiquidGlassButton(
+                    label: _isListening ? 'Принимаю' : 'Принять',
+                    icon: _isListening ? Icons.stop_rounded : Icons.download_rounded,
+                    active: _isListening,
+                    isWhiteTheme: isWhite,
+                    onPressed: _toggleReceive,
+                  ),
+                  LiquidGlassButton(
+                    label: 'Отправить',
+                    icon: Icons.upload_rounded,
+                    active: _isTransferring,
+                    isWhiteTheme: isWhite,
+                    onPressed: _isTransferring ? null : _pickAndSendFiles,
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 18),
+
+            // Найденные устройства
+            if (_peers.isNotEmpty) ...[
+              Container(
                 padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: cardBg,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: cardBorder),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Локальные IPv4 этого устройства:', style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 4),
-                    Text(_localIps, style: const TextStyle(fontSize: 13)),
+                    Text('НАЙДЕНЫ', style: TextStyle(fontSize: 11, color: subtle, fontWeight: FontWeight.w600)),
+                    ..._peers.values.map((peer) {
+                      final selected = _ipController.text.trim() == peer.ip;
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          peer.name == 'iPhone' ? Icons.phone_iphone : Icons.phone_android,
+                          color: selected ? accent : fg,
+                          size: 20,
+                        ),
+                        title: Text(peer.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                        subtitle: Text(peer.ip, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+                        trailing: selected ? Icon(Icons.check_circle, color: accent, size: 18) : null,
+                        onTap: () => setState(() => _ipController.text = peer.ip),
+                      );
+                    }),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _toggleServer,
-              icon: Icon(_isListening ? Icons.stop : Icons.download),
-              label: Text(_isListening ? 'Остановить приём (Порт $kTransferPort)' : 'Режим приёма (Слушать порт)'),
-              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
-            ),
-            const SizedBox(height: 24),
+              const SizedBox(height: 14),
+            ],
+
+            // Поле IP
             TextField(
-  controller: _ipController,
-  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-  decoration: const InputDecoration(
-    labelText: 'IP-адрес приёмника',
-    hintText: 'Например, 172.20.10.1 или 192.168.1.50',
-    border: OutlineInputBorder(),
-  ),
-),
-const SizedBox(height: 8),
-Wrap(
-  spacing: 8,
-  runSpacing: 6,
-  children: [
-    ActionChip(
-      label: const Text('.'),
-      onPressed: () {
-        final text = _ipController.text;
-        _ipController.text = '$text.';
-        _ipController.selection = TextSelection.fromPosition(
-          TextPosition(offset: _ipController.text.length),
-        );
-      },
-    ),
-    ActionChip(
-      label: const Text('192.168.1.'),
-      onPressed: () {
-        _ipController.text = '192.168.1.';
-        _ipController.selection = TextSelection.fromPosition(
-          TextPosition(offset: _ipController.text.length),
-        );
-      },
-    ),
-    ActionChip(
-      label: const Text('172.20.10.1'),
-      onPressed: () {
-        _ipController.text = '172.20.10.1';
-        _ipController.selection = TextSelection.fromPosition(
-          TextPosition(offset: _ipController.text.length),
-        );
-      },
-    ),
-  ],
-),
+              controller: _ipController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 15),
+              decoration: InputDecoration(
+                labelText: 'IP получателя',
+                hintText: '172.20.10.1',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.paste_rounded),
+                  onPressed: () async {
+                    final data = await Clipboard.getData('text/plain');
+                    if (data?.text != null) {
+                      _ipController.text = data!.text!.trim();
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                ActionChip(
+                  label: const Text('.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                  onPressed: () {
+                    _ipController.text = '${_ipController.text}.';
+                    _ipController.selection = TextSelection.fromPosition(
+                      TextPosition(offset: _ipController.text.length),
+                    );
+                  },
+                ),
+                ActionChip(
+                  label: const Text('172.20.10.1'),
+                  onPressed: () => _ipController.text = '172.20.10.1',
+                ),
+                ActionChip(
+                  label: const Text('192.168.1.'),
+                  onPressed: () {
+                    _ipController.text = '192.168.1.';
+                    _ipController.selection = TextSelection.fromPosition(
+                      TextPosition(offset: _ipController.text.length),
+                    );
+                  },
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 18),
+
+            // Скорость и прогресс
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: cardBg,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '${_speedMBps.toStringAsFixed(1)} МБ/с',
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: accent),
+                      ),
+                      Text(
+                        _etaText,
+                        style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: subtle),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(
+                    value: _progress,
+                    minHeight: 8,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('${(_progress * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12)),
+                      Text(
+                        '${_formatSize(_transferredBytes)} / ${_formatSize(_totalBytes)}',
+                        style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: subtle),
+                      ),
+                    ],
+                  ),
+                  if (_currentFileName.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _currentFileName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: subtle),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  Text(_status, style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SettingsPage extends StatefulWidget {
+  final AppSettings settings;
+  final ValueChanged<bool> onThemeChanged;
+  final ValueChanged<String?> onSaveDirChanged;
+  final Future<void> Function() onClearHistory;
+
+  const SettingsPage({
+    super.key,
+    required this.settings,
+    required this.onThemeChanged,
+    required this.onSaveDirChanged,
+    required this.onClearHistory,
+  });
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  late TextEditingController _dirController;
+  late bool _whiteTheme;
+
+  @override
+  void initState() {
+    super.initState();
+    _whiteTheme = widget.settings.isWhiteTheme;
+    _dirController = TextEditingController(text: widget.settings.customSaveDir ?? '');
+  }
+
+  @override
+  void dispose() {
+    _dirController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickFolder() async {
+    try {
+      final selected = await FilePicker.platform.getDirectoryPath();
+      if (selected != null && selected.isNotEmpty) {
+        _dirController.text = selected;
+        widget.onSaveDirChanged(selected);
+        setState(() {});
+      }
+    } catch (_) {}
+  }
+
+  String _formatBytes(int b) {
+    if (b <= 0) return '0 Б';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} КБ';
+    if (b < 1024 * 1024 * 1024) return '${(b / (1024 * 1024)).toStringAsFixed(2)} МБ';
+    return '${(b / (1024 * 1024 * 1024)).toStringAsFixed(2)} ГБ';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final history = widget.settings.history;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Настройки')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Тема: OLED чёрный / Белый
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Белый фон'),
+            subtitle: Text(_whiteTheme ? 'Включён белый фон' : 'Включён OLED-чёрный фон'),
+            value: _whiteTheme,
+            onChanged: (val) {
+              setState(() => _whiteTheme = val);
+              widget.onThemeChanged(val);
+            },
+          ),
+
+          const Divider(height: 28),
+
+          // Выбор папки сохранения
+          const Text('Папка сохранения', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _dirController,
+            decoration: InputDecoration(
+              hintText: 'По умолчанию (Download / Documents)',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.folder_open_rounded),
+                onPressed: _pickFolder,
+              ),
+            ),
+            onSubmitted: (val) => widget.onSaveDirChanged(val.trim().isEmpty ? null : val.trim()),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              ActionChip(
+                label: const Text('Выбрать папку'),
+                onPressed: _pickFolder,
+              ),
+              if (Platform.isAndroid)
+                ActionChip(
+                  label: const Text('/storage/emulated/0/Download'),
+                  onPressed: () {
+                    const p = '/storage/emulated/0/Download';
+                    _dirController.text = p;
+                    widget.onSaveDirChanged(p);
+                  },
+                ),
+              ActionChip(
+                label: const Text('По умолчанию'),
+                onPressed: () {
+                  _dirController.clear();
+                  widget.onSaveDirChanged(null);
+                },
+              ),
+            ],
+          ),
+
+          const Divider(height: 28),
+
+          // История передач
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('История (${history.length})', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+              if (history.isNotEmpty)
+                TextButton(
+                  onPressed: () async {
+                    await widget.onClearHistory();
+                    setState(() {});
+                  },
+                  child: const Text('Очистить'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (history.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text('История пока пуста', style: TextStyle(color: Colors.grey)),
+            )
+          else
+            ...history.map((item) {
+              final dt = '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}';
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  item.direction == 'Принято' ? Icons.download_done_rounded : Icons.check_circle_outline_rounded,
+                ),
+                title: Text(item.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  '${item.direction} · ${_formatBytes(item.sizeBytes)} · $dt',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+}
