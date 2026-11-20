@@ -4,84 +4,190 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Анимация фона. false = фон неподвижный (по умолчанию).
-const bool kAnimatedBackground = false;
-
 // ───────────────────────── Палитра ─────────────────────────
 
 class GlassPalette {
   final bool isWhite;
   const GlassPalette(this.isWhite);
 
-  Color get accent => isWhite ? const Color(0xFF007AFF) : const Color(0xFF64D2FF);
+  Color get accent => isWhite ? const Color(0xFF16A34A) : const Color(0xFF5BF277);
   Color get fg => isWhite ? const Color(0xFF0B0B12) : Colors.white;
   Color get subtle => isWhite ? const Color(0x990B0B12) : const Color(0xA6FFFFFF);
   Color get danger => const Color(0xFFFF6B7A);
-  Color get success => const Color(0xFF5BE49B);
+  Color get success => isWhite ? const Color(0xFF16A34A) : const Color(0xFF5BF277);
 }
 
 // ───────────────────────── Фон ─────────────────────────
 
-class _Blob {
-  final double x;
-  final double y;
-  final double r;
-  final double speed;
-  final double phase;
-  final double opacity;
-  final Color color;
+// ───────────────────────── Фон: зелёные волны ─────────────────────────
 
-  const _Blob(this.x, this.y, this.r, this.speed, this.phase, this.opacity, this.color);
-}
-
-class _BlobPainter extends CustomPainter {
+class _WavesPainter extends CustomPainter {
   final bool isWhite;
 
-  _BlobPainter(this.isWhite, {Listenable? repaint}) : super(repaint: repaint);
+  _WavesPainter(this.isWhite);
 
-  static const List<_Blob> _dark = [
-    _Blob(0.15, 0.10, 0.65, 1, 0.00, 0.16, Color(0xFF2BB8FF)),
-    _Blob(0.92, 0.38, 0.70, 2, 0.30, 0.13, Color(0xFF6A4DFF)),
-    _Blob(0.15, 0.68, 0.60, 1, 0.55, 0.08, Color(0xFF19D3B0)),
-    _Blob(0.88, 0.95, 0.65, 3, 0.80, 0.11, Color(0xFFFF4FA3)),
+  static const List<Offset> _waveA = [
+    Offset(1.0068, 0.1893),
+    Offset(0.9155, 0.1934),
+    Offset(0.8216, 0.2086),
+    Offset(0.7512, 0.2302),
+    Offset(0.6925, 0.2546),
+    Offset(0.6338, 0.2817),
+    Offset(0.5751, 0.3169),
+    Offset(0.5164, 0.3467),
+    Offset(0.446, 0.3765),
+    Offset(0.3873, 0.4009),
+    Offset(0.2934, 0.4252),
+    Offset(0.1761, 0.4523),
+    Offset(0.0704, 0.4794),
+    Offset(-0.0056, 0.5011),
   ];
 
-  static const List<_Blob> _light = [
-    _Blob(0.15, 0.12, 0.80, 1, 0.00, 0.75, Color(0xFF7DB7FF)),
-    _Blob(0.90, 0.35, 0.85, 2, 0.30, 0.65, Color(0xFFC4B5FF)),
-    _Blob(0.18, 0.64, 0.75, 1, 0.55, 0.65, Color(0xFFA8F0D8)),
-    _Blob(0.85, 0.92, 0.80, 3, 0.80, 0.70, Color(0xFFFFB3D9)),
+  static const List<Offset> _waveB = [
+    Offset(-0.0094, 0.3677),
+    Offset(0.1174, 0.3548),
+    Offset(0.3169, 0.3413),
+    Offset(0.4695, 0.3304),
+    Offset(0.5516, 0.3142),
+    Offset(0.6338, 0.2844),
   ];
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Фаза считается по часам, поэтому на всех экранах фон «плывёт» синхронно.
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final t = kAnimatedBackground ? (now % 60000) / 60000.0 : 0.0;
-    final blobs = isWhite ? _light : _dark;
+  static const List<Offset> _waveC = [
+    Offset(1.0058, 0.4078),
+    Offset(0.9272, 0.4605),
+    Offset(0.8333, 0.5038),
+    Offset(0.7394, 0.5336),
+  ];
 
-    for (final b in blobs) {
-      final ang = 2 * math.pi * (t * b.speed + b.phase);
-      final cx = size.width * (b.x + 0.10 * math.cos(ang));
-      final cy = size.height * (b.y + 0.07 * math.sin(ang));
-      final radius = size.shortestSide * b.r;
-      final center = Offset(cx, cy);
-      final paint = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            b.color.withOpacity(b.opacity),
-            b.color.withOpacity(0.0),
-          ],
-        ).createShader(Rect.fromCircle(center: center, radius: radius));
-      canvas.drawCircle(center, radius, paint);
+  static const List<Offset> _waveD = [
+    Offset(-0.0113, 0.9761),
+    Offset(0.1408, 0.9263),
+    Offset(0.2347, 0.9144),
+    Offset(0.3521, 0.9209),
+    Offset(0.4695, 0.9399),
+    Offset(0.5634, 0.9491),
+    Offset(0.6338, 0.948),
+    Offset(0.7277, 0.929),
+    Offset(0.8216, 0.9155),
+    Offset(0.9272, 0.9101),
+    Offset(1.0058, 0.9148),
+  ];
+
+  static const List<Offset> _waveE = [
+    Offset(0.4577, 1.0076),
+    Offset(0.5282, 0.9832),
+    Offset(0.5869, 0.9642),
+    Offset(0.6338, 0.9491),
+  ];
+
+  Path _path(List<Offset> pts, Size size) {
+    Offset pt(int i) {
+      final k = math.max(0, math.min(pts.length - 1, i));
+      return Offset(pts[k].dx * size.width, pts[k].dy * size.height);
     }
+
+    final path = Path()..moveTo(pt(0).dx, pt(0).dy);
+    for (int i = 0; i < pts.length - 1; i++) {
+      final p0 = pt(i - 1);
+      final p1 = pt(i);
+      final p2 = pt(i + 1);
+      final p3 = pt(i + 2);
+      final c1 = p1 + (p2 - p0) / 6;
+      final c2 = p2 - (p3 - p1) / 6;
+      path.cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, p2.dx, p2.dy);
+    }
+    return path;
+  }
+
+  void _ambient(Canvas canvas, Size size, double fx, double fy, double fr, Color c, double alpha) {
+    final center = Offset(fx * size.width, fy * size.height);
+    final r = fr * size.width;
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [c.withOpacity(alpha), c.withOpacity(alpha * 0.22), c.withOpacity(0.0)],
+          stops: const [0.0, 0.35, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: r)),
+    );
+  }
+
+  void _wave(Canvas canvas, Size size, List<Offset> pts, List<double> a, {double scale = 1.0}) {
+    final rect = Offset.zero & size;
+    final path = _path(pts, size);
+    final k = isWhite ? 0.85 : 1.0;
+
+    final glow = isWhite ? const Color(0xFF22C55E) : const Color(0xFF1ADC32);
+    final mid = isWhite ? const Color(0xFF16A34A) : const Color(0xFF40FF52);
+    final core = isWhite ? const Color(0xFF15803D) : const Color(0xFFB8FFBC);
+
+    Shader grad(Color c, double m) {
+      double v(double x) => (x * m * k).clamp(0.0, 1.0).toDouble();
+      return LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: [c.withOpacity(v(a[0])), c.withOpacity(v(a[1])), c.withOpacity(v(a[2]))],
+        stops: const [0.0, 0.55, 1.0],
+      ).createShader(rect);
+    }
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 26 * scale
+        ..shader = grad(glow, 0.30)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 9 * scale
+        ..shader = grad(glow, 0.55)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3 * scale
+        ..shader = grad(mid, 0.75)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2 * scale
+        ..shader = grad(core, 1.0),
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _BlobPainter oldDelegate) => oldDelegate.isWhite != isWhite;
+  void paint(Canvas canvas, Size size) {
+    final g = isWhite ? const Color(0xFF22C55E) : const Color(0xFF1FFF3F);
+    final soft = isWhite ? 1.3 : 1.0;
+
+    // Мягкое зелёное свечение (стекло «ловит» его сквозь размытие).
+    _ambient(canvas, size, 1.00, 0.17, 0.62, g, 0.20 * soft);
+    _ambient(canvas, size, 0.00, 0.72, 0.50, g, 0.09 * soft);
+    _ambient(canvas, size, 1.00, 0.60, 0.45, g, 0.05 * soft);
+    _ambient(canvas, size, 0.78, 0.97, 0.55, g, 0.20 * soft);
+
+    _wave(canvas, size, _waveA, const [0.10, 0.45, 1.0]);
+    _wave(canvas, size, _waveB, const [0.10, 0.25, 0.45], scale: 0.8);
+    _wave(canvas, size, _waveC, const [0.0, 0.03, 0.08], scale: 0.7);
+    _wave(canvas, size, _waveD, const [0.20, 0.80, 1.0]);
+    _wave(canvas, size, _waveE, const [0.15, 0.55, 0.95], scale: 0.85);
+  }
+
+  @override
+  bool shouldRepaint(covariant _WavesPainter oldDelegate) => oldDelegate.isWhite != isWhite;
 }
 
-class LiquidBackground extends StatefulWidget {
+class LiquidBackground extends StatelessWidget {
   final bool isWhite;
   final Widget child;
 
@@ -92,30 +198,8 @@ class LiquidBackground extends StatefulWidget {
   });
 
   @override
-  State<LiquidBackground> createState() => _LiquidBackgroundState();
-}
-
-class _LiquidBackgroundState extends State<LiquidBackground> with SingleTickerProviderStateMixin {
-  late final AnimationController _c;
-
-  @override
-  void initState() {
-    super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(seconds: 30));
-    if (kAnimatedBackground) {
-      _c.repeat();
-    }
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final base = widget.isWhite ? const Color(0xFFEEF2FA) : const Color(0xFF000000);
+    final base = isWhite ? const Color(0xFFEFF5F0) : const Color(0xFF000000);
     return ColoredBox(
       color: base,
       child: Stack(
@@ -123,11 +207,11 @@ class _LiquidBackgroundState extends State<LiquidBackground> with SingleTickerPr
         children: [
           RepaintBoundary(
             child: CustomPaint(
-              painter: _BlobPainter(widget.isWhite, repaint: _c),
+              painter: _WavesPainter(isWhite),
               size: Size.infinite,
             ),
           ),
-          widget.child,
+          child,
         ],
       ),
     );
@@ -202,14 +286,32 @@ class _GlassRimPainter extends CustomPainter {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          Colors.white.withOpacity(isWhite ? 0.95 : 0.55),
+          (isWhite ? Colors.white : const Color(0xFFE4FFE8)).withOpacity(isWhite ? 0.95 : 0.60),
           Colors.white.withOpacity(0.06),
           Colors.white.withOpacity(0.0),
-          Colors.white.withOpacity(isWhite ? 0.55 : 0.30),
+          (isWhite ? Colors.white : const Color(0xFF55F06A)).withOpacity(isWhite ? 0.55 : 0.38),
         ],
         stops: const [0.0, 0.35, 0.65, 1.0],
       ).createShader(rect);
     canvas.drawRRect(rrect, rim);
+
+    // Перелив: мягкий зелёно-салатовый блик, который «подхватывает» цвет фона.
+    final acc = GlassPalette(isWhite).accent;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, Radius.circular(radius)),
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            acc.withOpacity(isWhite ? 0.14 : 0.16),
+            acc.withOpacity(0.0),
+            const Color(0xFFC8FFB0).withOpacity(isWhite ? 0.0 : 0.07),
+            acc.withOpacity(isWhite ? 0.10 : 0.13),
+          ],
+          stops: const [0.0, 0.38, 0.68, 1.0],
+        ).createShader(rect),
+    );
 
     final highlight = Paint()
       ..style = PaintingStyle.stroke
@@ -245,7 +347,7 @@ class GlassCard extends StatelessWidget {
     required this.isWhite,
     this.padding = const EdgeInsets.all(18),
     this.radius = 28,
-    this.blur = 26,
+    this.blur = 18,
     this.tint,
     this.onTap,
   });
