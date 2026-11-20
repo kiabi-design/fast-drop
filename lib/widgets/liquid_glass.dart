@@ -4,6 +4,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+/// Сила размытия фона за стеклом. Меньше = фон виден чётче, как в iOS.
+/// 0.42 — сбалансированно; 0.25 — почти прозрачное; 0.6 — матовое.
+const double kGlassBlurScale = 0.42;
+
 // ───────────────────────── Палитра ─────────────────────────
 
 class GlassPalette {
@@ -199,7 +203,7 @@ class LiquidBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = isWhite ? const Color(0xFFEFF5F0) : const Color(0xFF000000);
+    final base = isWhite ? const Color(0xFFE3EEE6) : const Color(0xFF000000);
     return ColoredBox(
       color: base,
       child: Stack(
@@ -268,6 +272,52 @@ class _PressableState extends State<_Pressable> {
 
 // ───────────────────────── Стеклянная карточка ─────────────────────────
 
+/// Тень вокруг стекла (только снаружи, внутрь стекла не попадает).
+class _GlassShadowPainter extends CustomPainter {
+  final double radius;
+  final bool isWhite;
+
+  _GlassShadowPainter(this.radius, this.isWhite);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width < 4 || size.height < 4) return;
+    final rrect = RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(radius));
+    final outer = Path()
+      ..addRect(Rect.fromLTWH(-120, -120, size.width + 240, size.height + 240));
+    final hole = Path()..addRRect(rrect);
+    final clip = Path.combine(PathOperation.difference, outer, hole);
+
+    final big = size.shortestSide > 80;
+    canvas.save();
+    canvas.clipPath(clip);
+
+    // Контактная тень: придаёт объём и отделяет стекло от фона.
+    canvas.drawRRect(
+      rrect.shift(Offset(0, big ? 10 : 6)),
+      Paint()
+        ..color = (isWhite ? const Color(0xFF0E3B1C) : Colors.black).withOpacity(isWhite ? 0.20 : 0.60)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, big ? 16 : 9),
+    );
+
+    // Лёгкое зелёное свечение вокруг стекла на тёмной теме.
+    if (!isWhite) {
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = const Color(0xFF39FF5A).withOpacity(0.07)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, big ? 22 : 12),
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlassShadowPainter oldDelegate) =>
+      oldDelegate.radius != radius || oldDelegate.isWhite != isWhite;
+}
+
+/// Кромка, блик и «толщина» жидкого стекла.
 class _GlassRimPainter extends CustomPainter {
   final double radius;
   final bool isWhite;
@@ -276,29 +326,56 @@ class _GlassRimPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.width < 4 || size.height < 4) return;
     final rect = Offset.zero & size;
-    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(radius)).deflate(0.6);
-
-    final rim = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          (isWhite ? Colors.white : const Color(0xFFE4FFE8)).withOpacity(isWhite ? 0.95 : 0.60),
-          Colors.white.withOpacity(0.06),
-          Colors.white.withOpacity(0.0),
-          (isWhite ? Colors.white : const Color(0xFF55F06A)).withOpacity(isWhite ? 0.55 : 0.38),
-        ],
-        stops: const [0.0, 0.35, 0.65, 1.0],
-      ).createShader(rect);
-    canvas.drawRRect(rrect, rim);
-
-    // Перелив: мягкий зелёно-салатовый блик, который «подхватывает» цвет фона.
+    final base = RRect.fromRectAndRadius(rect, Radius.circular(radius));
     final acc = GlassPalette(isWhite).accent;
+    final edgeW = math.min(size.shortestSide * 0.20, 14.0);
+
+    canvas.save();
+    canvas.clipRRect(base);
+
+    // 1. Свет вдоль кромки: ощущение толщины и преломления на краю стекла.
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, Radius.circular(radius)),
+      base.deflate(edgeW / 2),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = edgeW
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, edgeW * 0.55)
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withOpacity(isWhite ? 0.90 : 0.45),
+            Colors.white.withOpacity(isWhite ? 0.12 : 0.04),
+            Colors.white.withOpacity(isWhite ? 0.12 : 0.04),
+            acc.withOpacity(isWhite ? 0.60 : 0.42),
+          ],
+          stops: const [0.0, 0.35, 0.65, 1.0],
+        ).createShader(rect),
+    );
+
+    // 2. Мокрый блик сверху.
+    final glossH = math.min(size.height * 0.34, 30.0);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * 0.07, 2.5, size.width * 0.86, glossH),
+        Radius.circular(glossH),
+      ),
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white.withOpacity(isWhite ? 0.60 : 0.22),
+            Colors.white.withOpacity(0.0),
+          ],
+        ).createShader(Rect.fromLTWH(0, 2.5, size.width, glossH)),
+    );
+
+    // 3. Перелив: мягкий зелёно-салатовый блик, который «подхватывает» цвет фона.
+    canvas.drawRRect(
+      base,
       Paint()
         ..shader = LinearGradient(
           begin: Alignment.topLeft,
@@ -312,19 +389,37 @@ class _GlassRimPainter extends CustomPainter {
           stops: const [0.0, 0.38, 0.68, 1.0],
         ).createShader(rect),
     );
+    canvas.restore();
 
-    final highlight = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.center,
-        colors: [
-          Colors.white.withOpacity(isWhite ? 0.75 : 0.22),
-          Colors.white.withOpacity(0.0),
-        ],
-      ).createShader(rect);
-    canvas.drawRRect(rrect.deflate(1.4), highlight);
+    // 4. Яркая тонкая кромка (зеркальный край стекла).
+    canvas.drawRRect(
+      base.deflate(0.7),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.3
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            (isWhite ? Colors.white : const Color(0xFFE4FFE8)).withOpacity(isWhite ? 1.0 : 0.85),
+            Colors.white.withOpacity(0.08),
+            Colors.white.withOpacity(0.0),
+            (isWhite ? Colors.white : const Color(0xFF55F06A)).withOpacity(isWhite ? 0.9 : 0.55),
+          ],
+          stops: const [0.0, 0.35, 0.65, 1.0],
+        ).createShader(rect),
+    );
+
+    // 5. Тонкий тёмный контур снаружи — чтобы стекло читалось на светлом фоне.
+    if (isWhite) {
+      canvas.drawRRect(
+        base.deflate(0.4),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.8
+          ..color = const Color(0xFF0E3B1C).withOpacity(0.12),
+      );
+    }
   }
 
   @override
@@ -356,8 +451,8 @@ class GlassCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(radius);
 
-    Color top = isWhite ? Colors.white.withOpacity(0.62) : Colors.white.withOpacity(0.07);
-    Color bottom = isWhite ? Colors.white.withOpacity(0.32) : Colors.white.withOpacity(0.02);
+    Color top = isWhite ? Colors.white.withOpacity(0.42) : Colors.white.withOpacity(0.08);
+    Color bottom = isWhite ? Colors.white.withOpacity(0.16) : Colors.white.withOpacity(0.025);
     if (tint != null) {
       top = Color.alphaBlend(tint!.withOpacity(0.32), top);
       bottom = Color.alphaBlend(tint!.withOpacity(0.12), bottom);
@@ -381,14 +476,19 @@ class GlassCard extends StatelessWidget {
       child: body,
     );
 
-    if (blur > 0) {
+    final sigma = blur * kGlassBlurScale;
+    if (sigma > 0.3) {
       body = BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
         child: body,
       );
     }
 
     Widget card = ClipRRect(borderRadius: borderRadius, child: body);
+    card = CustomPaint(
+      painter: _GlassShadowPainter(radius, isWhite),
+      child: card,
+    );
 
     if (onTap != null) {
       card = _Pressable(onTap: onTap, pressedScale: 0.985, child: card);
