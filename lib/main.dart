@@ -2,23 +2,27 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'screens/incoming_text_screen.dart';
 import 'screens/transfer_screen.dart';
+import 'widgets/liquid_glass.dart';
 
 const String kAppVersion = '1.2';
 // Порты ниже 49152, чтобы не конфликтовать с эфемерными портами iOS.
 const int kTransferPort = 14680;
 const int kDiscoveryPort = 14681;
 const int kChunkSize = 1024 * 1024;
-const BorderRadius kPillRadius = BorderRadius.all(Radius.circular(24));
+
+/// false: выбранные файлы попадают в список «ВЫБРАНО», отправка по кнопке «Отправить (N)».
+/// true: после выбора файлов отправка начинается сразу.
+const bool kSendImmediately = false;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -75,6 +79,7 @@ class DiscoveredPeer {
 
 class OutgoingItem {
   final String relativeName;
+  final String? title;
   final int sizeBytes;
   final File? file;
   final Uint8List? rawBytes;
@@ -82,6 +87,7 @@ class OutgoingItem {
   OutgoingItem({
     required this.relativeName,
     required this.sizeBytes,
+    this.title,
     this.file,
     this.rawBytes,
   });
@@ -197,34 +203,42 @@ class _FastDropAppState extends State<FastDropApp> {
   @override
   Widget build(BuildContext context) {
     final isWhite = _settings.isWhiteTheme;
-    final bg = isWhite ? const Color(0xFFFFFFFF) : const Color(0xFF000000);
-    final surface = isWhite ? const Color(0xFFF4F5F7) : const Color(0xFF0A0A0C);
-    final fg = isWhite ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
+    final p = GlassPalette(isWhite);
+    final bg = isWhite ? const Color(0xFFEEF2FA) : const Color(0xFF000000);
 
     return MaterialApp(
       title: 'FastDrop $kAppVersion',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: isWhite ? Brightness.light : Brightness.dark,
-        scaffoldBackgroundColor: bg,
+        scaffoldBackgroundColor: Colors.transparent,
         colorScheme: ColorScheme(
           brightness: isWhite ? Brightness.light : Brightness.dark,
-          primary: fg,
-          onPrimary: bg,
-          secondary: isWhite ? const Color(0xFF007AFF) : const Color(0xFF64D2FF),
+          primary: p.accent,
+          onPrimary: Colors.black,
+          secondary: p.accent,
           onSecondary: Colors.black,
-          error: Colors.redAccent,
+          error: p.danger,
           onError: Colors.white,
-          surface: surface,
-          onSurface: fg,
+          surface: bg,
+          onSurface: p.fg,
         ),
-        chipTheme: ChipThemeData(
-          shape: RoundedRectangleBorder(borderRadius: kPillRadius),
+        snackBarTheme: SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: isWhite ? const Color(0xE6FFFFFF) : const Color(0xE61C1C24),
+          contentTextStyle: TextStyle(color: p.fg, fontSize: 14),
+          shape: const StadiumBorder(),
         ),
         useMaterial3: true,
       ),
       home: !_loaded
-          ? Scaffold(backgroundColor: bg, body: const Center(child: CircularProgressIndicator()))
+          ? LiquidBackground(
+              isWhite: isWhite,
+              child: const Scaffold(
+                backgroundColor: Colors.transparent,
+                body: Center(child: CircularProgressIndicator()),
+              ),
+            )
           : TransferHomePage(
               settings: _settings,
               onThemeChanged: _updateTheme,
@@ -232,202 +246,6 @@ class _FastDropAppState extends State<FastDropApp> {
               onAddHistory: _addHistory,
               onClearHistory: _clearHistory,
             ),
-    );
-  }
-}
-
-// ───────────────────────── Виджеты ─────────────────────────
-
-class LiquidGlassButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool active;
-  final bool isWhiteTheme;
-  final VoidCallback? onPressed;
-
-  const LiquidGlassButton({
-    super.key,
-    required this.label,
-    required this.icon,
-    required this.isWhiteTheme,
-    required this.onPressed,
-    this.active = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isIos = Platform.isIOS;
-    final accent = isWhiteTheme ? const Color(0xFF007AFF) : const Color(0xFF64D2FF);
-    final textColor = active
-        ? accent
-        : (isWhiteTheme ? const Color(0xFF0A0A0A) : Colors.white);
-
-    final glassFill = isWhiteTheme
-        ? Colors.white.withOpacity(active ? 0.85 : 0.65)
-        : Colors.white.withOpacity(active ? 0.18 : 0.09);
-
-    final borderColor = active
-        ? accent.withOpacity(0.75)
-        : (isWhiteTheme
-            ? Colors.black.withOpacity(0.14)
-            : Colors.white.withOpacity(0.24));
-
-    final content = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-      decoration: BoxDecoration(
-        color: glassFill,
-        borderRadius: kPillRadius,
-        border: Border.all(color: borderColor, width: 1.1),
-        boxShadow: isIos
-            ? [
-                BoxShadow(
-                  color: active
-                      ? accent.withOpacity(0.22)
-                      : (isWhiteTheme
-                          ? Colors.black.withOpacity(0.08)
-                          : Colors.black.withOpacity(0.55)),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
-                ),
-              ]
-            : null,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: textColor),
-          const SizedBox(width: 7),
-          Text(
-            label,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.2,
-            ),
-          ),
-        ],
-      ),
-    );
-
-    final wrapped = isIos
-        ? ClipRRect(
-            borderRadius: kPillRadius,
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-              child: content,
-            ),
-          )
-        : content;
-
-    return Opacity(
-      opacity: onPressed == null ? 0.45 : 1.0,
-      child: InkWell(
-        borderRadius: kPillRadius,
-        onTap: onPressed,
-        child: wrapped,
-      ),
-    );
-  }
-}
-
-class SendChoiceCard extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isWhiteTheme;
-  final VoidCallback onTap;
-
-  const SendChoiceCard({
-    super.key,
-    required this.label,
-    required this.icon,
-    required this.isWhiteTheme,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isIos = Platform.isIOS;
-
-    if (isIos) {
-      final glassBg = isWhiteTheme
-          ? Colors.white.withOpacity(0.62)
-          : Colors.white.withOpacity(0.10);
-      final borderCol = isWhiteTheme
-          ? Colors.black.withOpacity(0.14)
-          : Colors.white.withOpacity(0.24);
-      final fgCol = isWhiteTheme ? const Color(0xFF0A0A0A) : Colors.white;
-
-      return ClipRRect(
-        borderRadius: kPillRadius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: InkWell(
-            borderRadius: kPillRadius,
-            onTap: onTap,
-            child: Container(
-              height: 92,
-              decoration: BoxDecoration(
-                color: glassBg,
-                borderRadius: kPillRadius,
-                border: Border.all(color: borderCol, width: 1.1),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(isWhiteTheme ? 0.06 : 0.45),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, size: 26, color: fgCol),
-                  const SizedBox(height: 8),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: fgCol,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    final tileBg = isWhiteTheme ? const Color(0xFF9CE3DE) : const Color(0xFF8BE0D8);
-    const tileFg = Color(0xFF071312);
-
-    return InkWell(
-      borderRadius: kPillRadius,
-      onTap: onTap,
-      child: Container(
-        height: 92,
-        decoration: BoxDecoration(
-          color: tileBg,
-          borderRadius: kPillRadius,
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 26, color: tileFg),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: tileFg,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -481,6 +299,8 @@ class _TransferHomePageState extends State<TransferHomePage> {
   String? _lastSavedPath;
   String? _lastSavedFolder;
 
+  final List<OutgoingItem> _queuedItems = [];
+
   String _status = 'Готово · v$kAppVersion';
   String _currentFileName = '';
   int _currentFileIndex = 0;
@@ -513,6 +333,37 @@ class _TransferHomePageState extends State<TransferHomePage> {
   void _hideKeyboard() {
     _ipFocus.unfocus();
     FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _toast(String text, {int seconds = 1}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text), duration: Duration(seconds: seconds)),
+    );
+  }
+
+  Future<void> _openReceivedFile(String path) async {
+    try {
+      final result = await OpenFilex.open(path);
+      if (result.type != ResultType.done) {
+        _toast('Не удалось открыть файл: ${result.message}', seconds: 3);
+      }
+    } catch (e) {
+      _toast('Не удалось открыть файл: $e', seconds: 3);
+    }
+  }
+
+  Future<void> _openReceivedFolder() async {
+    final folder = _lastSavedFolder;
+    if (folder == null || folder.isEmpty) return;
+    try {
+      final result = await OpenFilex.open(folder);
+      if (result.type != ResultType.done) {
+        _toast('Файлы лежат в: $folder', seconds: 4);
+      }
+    } catch (_) {
+      _toast('Файлы лежат в: $folder', seconds: 4);
+    }
   }
 
   Future<void> _initEnvironment() async {
@@ -672,6 +523,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
     } catch (_) {}
   }
 
+  IconData _iconForItem(OutgoingItem item) {
+    if (item.rawBytes != null) return Icons.notes_rounded;
+    if (item.relativeName.contains('/')) return Icons.folder_rounded;
+    return Icons.insert_drive_file_rounded;
+  }
+
   // ───────────── Экраны ─────────────
 
   void _cancelTransfer() {
@@ -725,6 +582,8 @@ class _TransferHomePageState extends State<TransferHomePage> {
                 Navigator.of(ctx).pop();
                 _openSendMenu();
               },
+              onOpenFile: _openReceivedFile,
+              onOpenFolder: _lastSavedFolder == null ? null : _openReceivedFolder,
             ),
           ),
         ),
@@ -910,7 +769,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
             _ui(() {
               _transferredBytes = receivedBytes;
-              _progress = totalSize > 0 ? (receivedBytes / totalSize).clamp(0.0, 1.0) : 0.0;
+              _progress = totalSize > 0 ? (receivedBytes / totalSize).clamp(0.0, 1.0).toDouble() : 0.0;
               _speedMBps = speed;
               _etaText = _formatEta(totalSize - receivedBytes, speed);
             });
@@ -971,15 +830,14 @@ class _TransferHomePageState extends State<TransferHomePage> {
       try {
         await raf?.close();
       } catch (_) {}
+      await _deletePartialReceivedFile();
       if (_receiveCancelled) {
-        await _deletePartialReceivedFile();
         _ui(() {
           _isReceivingNow = false;
           _status = 'Приём отменён';
           _speedMBps = 0.0;
         });
       } else {
-        await _deletePartialReceivedFile();
         _ui(() {
           _isReceivingNow = false;
           _speedMBps = 0.0;
@@ -994,188 +852,230 @@ class _TransferHomePageState extends State<TransferHomePage> {
     }
   }
 
-  // ───────────── Меню отправки ─────────────
+  // ───────────── Очередь и меню ─────────────
+
+  void _addToQueue(List<OutgoingItem> items) {
+    if (items.isEmpty) return;
+    _ui(() {
+      _queuedItems.addAll(items);
+      _status = 'В списке: ${_queuedItems.length}';
+    });
+    if (kSendImmediately) {
+      unawaited(_startSendingQueue());
+    }
+  }
+
+  void _removeQueuedItem(int index) {
+    if (_busy || index < 0 || index >= _queuedItems.length) return;
+    _ui(() {
+      _queuedItems.removeAt(index);
+      _status = _queuedItems.isEmpty ? 'Список очищен' : 'В списке: ${_queuedItems.length}';
+    });
+  }
+
+  void _clearQueuedItems() {
+    if (_busy) return;
+    _ui(() {
+      _queuedItems.clear();
+      _status = 'Готово · v$kAppVersion';
+    });
+  }
 
   Future<void> _openSendMenu() async {
     _hideKeyboard();
     if (_busy) return;
 
-    final host = _ipController.text.trim();
-    if (host.isEmpty) {
-      setState(() => _status = 'Укажите IP получателя');
-      return;
-    }
-
     final isWhite = widget.settings.isWhiteTheme;
-    final isIos = Platform.isIOS;
-    final sheetBg = isIos
-        ? (isWhite ? Colors.white.withOpacity(0.78) : const Color(0xFF0E1116).withOpacity(0.82))
-        : (isWhite ? const Color(0xFFF6F7F9) : const Color(0xFF0B1110));
-    final fg = isWhite ? const Color(0xFF0A0A0A) : Colors.white;
+    final p = GlassPalette(isWhite);
 
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.35),
       isScrollControlled: true,
       builder: (ctx) {
-        Widget panel = Container(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
-          decoration: BoxDecoration(
-            color: sheetBg,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            border: Border.all(
-              color: isWhite ? Colors.black12 : Colors.white12,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 38,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: fg.withOpacity(0.25),
-                  borderRadius: kPillRadius,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Что хотите отправить',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: fg,
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: GlassCard(
+              isWhite: isWhite,
+              radius: 36,
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: SendChoiceCard(
-                      label: 'Вставить',
-                      icon: Icons.content_paste_rounded,
-                      isWhiteTheme: isWhite,
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _sendFromClipboard(host);
-                      },
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: p.fg.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(4),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SendChoiceCard(
-                      label: 'Текст',
-                      icon: Icons.notes_rounded,
-                      isWhiteTheme: isWhite,
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _openTextComposer(host);
-                      },
+                  const SizedBox(height: 16),
+                  Text(
+                    'Что хотите отправить',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: p.fg,
                     ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: GlassChoiceTile(
+                          label: 'Вставить',
+                          icon: Icons.content_paste_rounded,
+                          isWhite: isWhite,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _enqueueClipboard();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: GlassChoiceTile(
+                          label: 'Текст',
+                          icon: Icons.notes_rounded,
+                          isWhite: isWhite,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _enqueueTextComposer();
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: GlassChoiceTile(
+                          label: 'Файл',
+                          icon: Icons.insert_drive_file_rounded,
+                          isWhite: isWhite,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _enqueueFiles();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: GlassChoiceTile(
+                          label: 'Папка',
+                          icon: Icons.folder_rounded,
+                          isWhite: isWhite,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _enqueueFolder();
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  OutgoingItem _textItem(String text, String label) {
+    final bytes = Uint8List.fromList(utf8.encode(text));
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final oneLine = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final preview = oneLine.length > 40 ? '${oneLine.substring(0, 40)}…' : oneLine;
+    return OutgoingItem(
+      relativeName: '${stamp}_$label',
+      title: 'Текст: $preview',
+      sizeBytes: bytes.length,
+      rawBytes: bytes,
+    );
+  }
+
+  Future<void> _enqueueClipboard() async {
+    final data = await Clipboard.getData('text/plain');
+    final text = data?.text ?? '';
+    if (text.trim().isEmpty) {
+      _ui(() => _status = 'Буфер обмена пуст');
+      return;
+    }
+    _addToQueue([_textItem(text, 'clipboard.txt')]);
+  }
+
+  Future<void> _enqueueTextComposer() async {
+    final isWhite = widget.settings.isWhiteTheme;
+    final p = GlassPalette(isWhite);
+    final controller = TextEditingController();
+
+    final text = await showDialog<String>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.45),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        child: GlassCard(
+          isWhite: isWhite,
+          radius: 32,
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Отправить текст',
+                style: TextStyle(color: p.fg, fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 14),
+              GlassTextField(
+                controller: controller,
+                isWhite: isWhite,
+                hint: 'Введите текст или ссылку...',
+                maxLines: 6,
+                autofocus: true,
+              ),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
-                    child: SendChoiceCard(
-                      label: 'Файл',
-                      icon: Icons.insert_drive_file_rounded,
-                      isWhiteTheme: isWhite,
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _pickAndSendFiles(host);
-                      },
+                    child: GlassButton(
+                      label: 'Отмена',
+                      isWhite: isWhite,
+                      expand: true,
+                      onPressed: () => Navigator.pop(ctx),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: SendChoiceCard(
-                      label: 'Папка',
-                      icon: Icons.folder_rounded,
-                      isWhiteTheme: isWhite,
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _pickAndSendFolder(host);
-                      },
+                    child: GlassButton(
+                      label: 'Добавить',
+                      isWhite: isWhite,
+                      active: true,
+                      expand: true,
+                      onPressed: () => Navigator.pop(ctx, controller.text),
                     ),
                   ),
                 ],
               ),
             ],
           ),
-        );
-
-        if (isIos) {
-          panel = ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-              child: panel,
-            ),
-          );
-        }
-
-        return panel;
-      },
-    );
-  }
-
-  Future<void> _sendFromClipboard(String host) async {
-    final data = await Clipboard.getData('text/plain');
-    final text = data?.text ?? '';
-    if (text.trim().isEmpty) {
-      if (mounted) setState(() => _status = 'Буфер обмена пуст');
-      return;
-    }
-    await _sendTextPayload(host, text, label: 'clipboard.txt');
-  }
-
-  Future<void> _openTextComposer(String host) async {
-    final controller = TextEditingController();
-    final text = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: kPillRadius),
-        title: const Text('Отправить текст'),
-        content: TextField(
-          controller: controller,
-          maxLines: 6,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: 'Введите текст или ссылку...',
-            border: OutlineInputBorder(borderRadius: kPillRadius),
-          ),
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
-          FilledButton(
-            style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: kPillRadius)),
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Отправить'),
-          ),
-        ],
       ),
     );
-    controller.dispose();
-    if (text != null && text.isNotEmpty) {
-      await _sendTextPayload(host, text, label: 'message.txt');
+
+    if (text != null && text.trim().isNotEmpty) {
+      _addToQueue([_textItem(text, 'message.txt')]);
     }
   }
 
-  Future<void> _sendTextPayload(String host, String text, {required String label}) async {
-    final bytes = Uint8List.fromList(utf8.encode(text));
-    final stamp = DateTime.now().millisecondsSinceEpoch;
-    final item = OutgoingItem(
-      relativeName: '${stamp}_$label',
-      sizeBytes: bytes.length,
-      rawBytes: bytes,
-    );
-    await _sendItemsQueue(host, [item], summaryDone: 'Текст отправлен');
-  }
-
-  Future<void> _pickAndSendFiles(String host) async {
+  Future<void> _enqueueFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       withReadStream: false,
@@ -1191,15 +1091,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
         items.add(OutgoingItem(relativeName: f.name, sizeBytes: len, file: file));
       }
     }
-    if (items.isEmpty) return;
-    await _sendItemsQueue(
-      host,
-      items,
-      summaryDone: items.length == 1 ? 'Файл отправлен' : 'Файлы (${items.length}) отправлены',
-    );
+    _addToQueue(items);
   }
 
-  Future<void> _pickAndSendFolder(String host) async {
+  Future<void> _enqueueFolder() async {
     final dirPath = await FilePicker.platform.getDirectoryPath();
     if (dirPath == null || dirPath.trim().isEmpty) return;
 
@@ -1213,8 +1108,8 @@ class _TransferHomePageState extends State<TransferHomePage> {
     final items = <OutgoingItem>[];
     await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
       if (entity is File) {
-        final p = entity.path.replaceAll('\\', '/');
-        final rel = p.startsWith(prefix) ? p.substring(prefix.length) : entity.uri.pathSegments.last;
+        final path = entity.path.replaceAll('\\', '/');
+        final rel = path.startsWith(prefix) ? path.substring(prefix.length) : entity.uri.pathSegments.last;
         final len = await entity.length();
         items.add(
           OutgoingItem(
@@ -1227,27 +1122,38 @@ class _TransferHomePageState extends State<TransferHomePage> {
     }
 
     if (items.isEmpty) {
-      if (mounted) setState(() => _status = 'Выбранная папка пуста');
+      _ui(() => _status = 'Выбранная папка пуста');
       return;
     }
-
-    await _sendItemsQueue(
-      host,
-      items,
-      summaryDone: 'Папка «$folderName» (${items.length} файлов) отправлена',
-    );
+    _addToQueue(items);
   }
 
   // ───────────── Отправка ─────────────
 
-  Future<void> _sendItemsQueue(
-    String host,
-    List<OutgoingItem> items, {
-    required String summaryDone,
-  }) async {
+  Future<void> _startSendingQueue() async {
+    _hideKeyboard();
+    if (_busy) return;
+
+    if (_queuedItems.isEmpty) {
+      await _openSendMenu();
+      return;
+    }
+
+    final host = _ipController.text.trim();
+    if (host.isEmpty) {
+      _ui(() => _status = 'Укажите IP получателя — список сохранён');
+      return;
+    }
+
+    await _sendItemsQueue(host, List<OutgoingItem>.from(_queuedItems));
+  }
+
+  Future<void> _sendItemsQueue(String host, List<OutgoingItem> items) async {
     if (_busy) return;
 
     _cancelRequested = false;
+    final sent = <OutgoingItem>[];
+
     _ui(() {
       _isTransferring = true;
       _transferCompleted = false;
@@ -1268,21 +1174,27 @@ class _TransferHomePageState extends State<TransferHomePage> {
         if (_cancelRequested) break;
         _ui(() => _currentFileIndex = i + 1);
         await _sendSingleItem(host, items[i]);
+        sent.add(items[i]);
       }
 
       if (_cancelRequested) {
-        _ui(() => _status = 'Передача отменена');
+        _ui(() {
+          _queuedItems.removeWhere((q) => sent.contains(q));
+          _status = 'Передача отменена';
+        });
       } else {
         _ui(() {
+          _queuedItems.removeWhere((q) => sent.contains(q));
           _progress = 1.0;
           _speedMBps = 0.0;
           _etaText = '00:00';
           _transferCompleted = true;
-          _status = summaryDone;
+          _status = sent.length == 1 ? 'Отправлено' : 'Отправлено элементов: ${sent.length}';
         });
       }
     } catch (e) {
       _ui(() {
+        _queuedItems.removeWhere((q) => sent.contains(q));
         _speedMBps = 0.0;
         _status = _cancelRequested ? 'Передача отменена' : 'Ошибка отправки: $e';
       });
@@ -1294,7 +1206,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   Future<void> _sendSingleItem(String host, OutgoingItem item) async {
     _ui(() {
-      _currentFileName = item.relativeName;
+      _currentFileName = item.title ?? item.relativeName;
       _totalBytes = item.sizeBytes;
       _transferredBytes = 0;
       _progress = 0.0;
@@ -1351,7 +1263,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
       final startOffset = await completer.future.timeout(const Duration(seconds: 10));
 
-      int sentBytes = startOffset.clamp(0, item.sizeBytes);
+      int sentBytes = startOffset.clamp(0, item.sizeBytes).toInt();
       int bytesInInterval = 0;
       DateTime lastSpeedUpdate = DateTime.now();
 
@@ -1394,7 +1306,9 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
             _ui(() {
               _transferredBytes = sentBytes;
-              _progress = item.sizeBytes > 0 ? (sentBytes / item.sizeBytes).clamp(0.0, 1.0) : 0.0;
+              _progress = item.sizeBytes > 0
+                  ? (sentBytes / item.sizeBytes).clamp(0.0, 1.0).toDouble()
+                  : 0.0;
               _speedMBps = speed;
               _etaText = _formatEta(item.sizeBytes - sentBytes, speed);
             });
@@ -1459,268 +1373,423 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   // ───────────── UI ─────────────
 
-  @override
-  Widget build(BuildContext context) {
-    final isWhite = widget.settings.isWhiteTheme;
-    final fg = isWhite ? const Color(0xFF0A0A0A) : Colors.white;
-    final subtle = isWhite ? Colors.black54 : Colors.white60;
-    final cardBorder = isWhite ? Colors.black12 : Colors.white12;
-    final cardBg = isWhite ? const Color(0xFFF6F7F9) : const Color(0xFF0A0A0C);
-    final accent = isWhite ? const Color(0xFF007AFF) : const Color(0xFF64D2FF);
-
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: _hideKeyboard,
-      child: Scaffold(
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          leading: IconButton(
-            icon: Icon(Icons.settings_rounded, color: fg),
-            tooltip: 'Настройки',
-            onPressed: _openSettings,
-          ),
-          title: Text(
-            'v$kAppVersion',
-            style: TextStyle(fontSize: 13, color: subtle, fontWeight: FontWeight.w600),
-          ),
-          actions: [
-            IconButton(
-              icon: Icon(isWhite ? Icons.dark_mode_rounded : Icons.light_mode_rounded, color: fg),
-              tooltip: isWhite ? 'OLED-чёрный фон' : 'Белый фон',
-              onPressed: () => widget.onThemeChanged(!isWhite),
-            ),
-            IconButton(
-              icon: Icon(Icons.refresh_rounded, color: fg),
-              tooltip: 'Обновить IP',
-              onPressed: _refreshLocalIps,
-            ),
-          ],
+  Widget _buildTopBar(bool isWhite, GlassPalette p) {
+    return Row(
+      children: [
+        GlassIconButton(
+          icon: Icons.settings_rounded,
+          isWhite: isWhite,
+          onTap: _openSettings,
         ),
-        body: SingleChildScrollView(
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        Expanded(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: kPillRadius,
-                  border: Border.all(color: cardBorder),
+              Text(
+                'FastDrop',
+                style: TextStyle(
+                  color: p.fg,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.3,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              ),
+              Text(
+                'v$kAppVersion',
+                style: TextStyle(color: p.subtle, fontSize: 11, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+        GlassIconButton(
+          icon: isWhite ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+          isWhite: isWhite,
+          onTap: () => widget.onThemeChanged(!isWhite),
+        ),
+        const SizedBox(width: 10),
+        GlassIconButton(
+          icon: Icons.refresh_rounded,
+          isWhite: isWhite,
+          onTap: _refreshLocalIps,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildIpCard(bool isWhite, GlassPalette p) {
+    return GlassCard(
+      isWhite: isWhite,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GlassLabel('МОЙ IP', isWhite: isWhite),
+          const SizedBox(height: 12),
+          if (_myIps.isEmpty)
+            Text('Нет сети', style: TextStyle(color: p.subtle, fontSize: 14))
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _myIps.map((ip) {
+                return GlassChip(
+                  label: ip,
+                  mono: true,
+                  isWhite: isWhite,
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: ip));
+                    _toast('Скопировано: $ip');
+                  },
+                );
+              }).toList(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPeersCard(bool isWhite, GlassPalette p) {
+    return GlassCard(
+      isWhite: isWhite,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GlassLabel('НАЙДЕНЫ', isWhite: isWhite),
+          const SizedBox(height: 6),
+          ..._peers.values.map((peer) {
+            final selected = _ipController.text.trim() == peer.ip;
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _ipController.text = peer.ip),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
                   children: [
-                    Text('МОЙ IP', style: TextStyle(fontSize: 11, color: subtle, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    if (_myIps.isEmpty)
-                      Text('Нет сети', style: TextStyle(color: subtle, fontSize: 13))
-                    else
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: _myIps.map((ip) {
-                          return ActionChip(
-                            label: Text(ip, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-                            onPressed: () {
-                              Clipboard.setData(ClipboardData(text: ip));
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Скопировано: $ip'), duration: const Duration(seconds: 1)),
-                              );
-                            },
-                          );
-                        }).toList(),
+                    Icon(
+                      peer.name == 'iPhone' ? Icons.phone_iphone_rounded : Icons.phone_android_rounded,
+                      color: selected ? p.accent : p.fg,
+                      size: 24,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            peer.name,
+                            style: TextStyle(
+                              color: p.fg,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            peer.ip,
+                            style: TextStyle(
+                              color: p.subtle,
+                              fontSize: 12,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                    if (selected) Icon(Icons.check_circle_rounded, color: p.accent, size: 22),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              Center(
-                child: LiquidGlassButton(
-                  label: _isListening ? 'Принимаю' : 'Принять',
-                  icon: _isListening ? Icons.stop_rounded : Icons.download_rounded,
-                  active: _isListening,
-                  isWhiteTheme: isWhite,
-                  onPressed: _toggleReceive,
-                ),
-              ),
-              const SizedBox(height: 16),
-              if (_peers.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: cardBg,
-                    borderRadius: kPillRadius,
-                    border: Border.all(color: cardBorder),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('НАЙДЕНЫ', style: TextStyle(fontSize: 11, color: subtle, fontWeight: FontWeight.w600)),
-                      ..._peers.values.map((peer) {
-                        final selected = _ipController.text.trim() == peer.ip;
-                        return ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(
-                            peer.name == 'iPhone' ? Icons.phone_iphone : Icons.phone_android,
-                            color: selected ? accent : fg,
-                            size: 20,
-                          ),
-                          title: Text(peer.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                          subtitle: Text(peer.ip, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-                          trailing: selected ? Icon(Icons.check_circle, color: accent, size: 18) : null,
-                          onTap: () => setState(() => _ipController.text = peer.ip),
-                        );
-                      }),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ],
-              TextField(
-                controller: _ipController,
-                focusNode: _ipFocus,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _hideKeyboard(),
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 15),
-                decoration: InputDecoration(
-                  labelText: 'IP получателя',
-                  hintText: '172.20.10.1',
-                  border: OutlineInputBorder(borderRadius: kPillRadius),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: kPillRadius,
-                    borderSide: BorderSide(color: cardBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: kPillRadius,
-                    borderSide: BorderSide(color: accent, width: 1.5),
-                  ),
-                  suffixIcon: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.paste_rounded),
-                        tooltip: 'Вставить',
-                        onPressed: () async {
-                          final data = await Clipboard.getData('text/plain');
-                          if (data?.text != null) {
-                            _ipController.text = data!.text!.trim();
-                          }
-                        },
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.keyboard_hide_rounded),
-                        tooltip: 'Скрыть клавиатуру',
-                        onPressed: _hideKeyboard,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQueueCard(bool isWhite, GlassPalette p) {
+    return GlassCard(
+      isWhite: isWhite,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              GlassLabel('ВЫБРАНО (${_queuedItems.length})', isWhite: isWhite),
+              Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  ActionChip(
-                    label: const Text('.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                    onPressed: () {
-                      _ipController.text = '${_ipController.text}.';
-                      _ipController.selection = TextSelection.fromPosition(
-                        TextPosition(offset: _ipController.text.length),
-                      );
-                    },
+                  GlassChip(
+                    label: 'Добавить',
+                    icon: Icons.add_rounded,
+                    isWhite: isWhite,
+                    onTap: _busy ? null : _openSendMenu,
                   ),
-                  ActionChip(
-                    label: const Text('172.20.10.1'),
-                    onPressed: () => _ipController.text = '172.20.10.1',
-                  ),
-                  ActionChip(
-                    label: const Text('192.168.1.'),
-                    onPressed: () {
-                      _ipController.text = '192.168.1.';
-                      _ipController.selection = TextSelection.fromPosition(
-                        TextPosition(offset: _ipController.text.length),
-                      );
-                    },
-                  ),
+                  if (!_busy) ...[
+                    const SizedBox(width: 8),
+                    GlassChip(
+                      label: 'Очистить',
+                      isWhite: isWhite,
+                      onTap: _clearQueuedItems,
+                    ),
+                  ],
                 ],
               ),
-              const SizedBox(height: 16),
-              Center(
-                child: LiquidGlassButton(
-                  label: 'Отправить',
-                  icon: Icons.upload_rounded,
-                  active: _isTransferring,
-                  isWhiteTheme: isWhite,
-                  onPressed: _busy ? null : _openSendMenu,
-                ),
-              ),
-              const SizedBox(height: 16),
-              GestureDetector(
-                onTap: _busy ? () => _openTransferScreen(isSender: _isTransferring) : null,
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: cardBg,
-                    borderRadius: kPillRadius,
-                    border: Border.all(color: cardBorder),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '${_speedMBps.toStringAsFixed(1)} МБ/с',
-                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: accent),
-                          ),
-                          Text(
-                            _etaText,
-                            style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: subtle),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      ClipRRect(
-                        borderRadius: kPillRadius,
-                        child: LinearProgressIndicator(
-                          value: _progress,
-                          minHeight: 8,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text('${(_progress * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12)),
-                          Text(
-                            '${_formatSize(_transferredBytes)} / ${_formatSize(_totalBytes)}',
-                            style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: subtle),
-                          ),
-                        ],
-                      ),
-                      if (_currentFileName.isNotEmpty) ...[
-                        const SizedBox(height: 6),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...List.generate(_queuedItems.length, (index) {
+            final item = _queuedItems[index];
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Icon(_iconForItem(item), size: 22, color: p.accent),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          _currentFileName,
+                          item.title ?? item.relativeName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12, color: subtle),
+                          style: TextStyle(
+                            color: p.fg,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          _formatSize(item.sizeBytes),
+                          style: TextStyle(
+                            color: p.subtle,
+                            fontSize: 11,
+                            fontFamily: 'monospace',
+                          ),
                         ),
                       ],
-                      const SizedBox(height: 6),
-                      Text(_status, style: const TextStyle(fontSize: 12)),
-                    ],
+                    ),
                   ),
+                  if (!_busy)
+                    IconButton(
+                      icon: Icon(Icons.close_rounded, size: 20, color: p.subtle),
+                      tooltip: 'Удалить из списка',
+                      onPressed: () => _removeQueuedItem(index),
+                    ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusCard(bool isWhite, GlassPalette p) {
+    final isError = _status.startsWith('Ошибка');
+    return GlassCard(
+      isWhite: isWhite,
+      padding: const EdgeInsets.all(20),
+      onTap: _busy ? () => _openTransferScreen(isSender: _isTransferring) : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '${_speedMBps.toStringAsFixed(1)} МБ/с',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  color: p.accent,
+                  letterSpacing: -0.5,
                 ),
               ),
+              Text(
+                _etaText,
+                style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: p.subtle),
+              ),
             ],
+          ),
+          const SizedBox(height: 14),
+          GlassProgressBar(
+            value: _progress,
+            isWhite: isWhite,
+            color: isError ? p.danger : null,
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '${(_progress * 100).toStringAsFixed(1)}%',
+                style: TextStyle(color: p.fg, fontSize: 12),
+              ),
+              Text(
+                '${_formatSize(_transferredBytes)} / ${_formatSize(_totalBytes)}',
+                style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: p.subtle),
+              ),
+            ],
+          ),
+          if (_currentFileName.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              _currentFileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: p.subtle),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Text(
+            _status,
+            style: TextStyle(fontSize: 12, color: isError ? p.danger : p.fg),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isWhite = widget.settings.isWhiteTheme;
+    final p = GlassPalette(isWhite);
+
+    return LiquidBackground(
+      isWhite: isWhite,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _hideKeyboard,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: SafeArea(
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildTopBar(isWhite, p),
+                  const SizedBox(height: 18),
+                  _buildIpCard(isWhite, p),
+                  const SizedBox(height: 18),
+                  Center(
+                    child: GlassButton(
+                      label: _isListening ? 'Принимаю' : 'Принять',
+                      icon: _isListening ? Icons.stop_rounded : Icons.download_rounded,
+                      active: _isListening,
+                      isWhite: isWhite,
+                      onPressed: _toggleReceive,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  if (_peers.isNotEmpty) ...[
+                    _buildPeersCard(isWhite, p),
+                    const SizedBox(height: 16),
+                  ],
+                  GlassTextField(
+                    controller: _ipController,
+                    focusNode: _ipFocus,
+                    isWhite: isWhite,
+                    label: 'IP получателя',
+                    hint: '172.20.10.1',
+                    mono: true,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onSubmitted: (_) => _hideKeyboard(),
+                    suffix: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.paste_rounded, color: p.subtle),
+                          tooltip: 'Вставить',
+                          onPressed: () async {
+                            final data = await Clipboard.getData('text/plain');
+                            if (data?.text != null) {
+                              setState(() => _ipController.text = data!.text!.trim());
+                            }
+                          },
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.keyboard_hide_rounded, color: p.subtle),
+                          tooltip: 'Скрыть клавиатуру',
+                          onPressed: _hideKeyboard,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      GlassChip(
+                        label: '.',
+                        isWhite: isWhite,
+                        onTap: () {
+                          _ipController.text = '${_ipController.text}.';
+                          _ipController.selection = TextSelection.fromPosition(
+                            TextPosition(offset: _ipController.text.length),
+                          );
+                        },
+                      ),
+                      GlassChip(
+                        label: '172.20.10.1',
+                        isWhite: isWhite,
+                        onTap: () => setState(() => _ipController.text = '172.20.10.1'),
+                      ),
+                      GlassChip(
+                        label: '192.168.1.',
+                        isWhite: isWhite,
+                        onTap: () {
+                          _ipController.text = '192.168.1.';
+                          _ipController.selection = TextSelection.fromPosition(
+                            TextPosition(offset: _ipController.text.length),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  if (_queuedItems.isNotEmpty) ...[
+                    _buildQueueCard(isWhite, p),
+                    const SizedBox(height: 16),
+                  ],
+                  Center(
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        GlassButton(
+                          label: _queuedItems.isEmpty ? 'Отправить' : 'Отправить (${_queuedItems.length})',
+                          icon: Icons.upload_rounded,
+                          active: _isTransferring,
+                          isWhite: isWhite,
+                          onPressed: _busy ? null : _startSendingQueue,
+                        ),
+                        if (_busy)
+                          GlassButton(
+                            label: 'Экран передачи',
+                            icon: Icons.open_in_full_rounded,
+                            isWhite: isWhite,
+                            onPressed: () => _openTransferScreen(isSender: _isTransferring),
+                          ),
+                        if (_busy)
+                          GlassButton(
+                            label: 'Отмена',
+                            icon: Icons.close_rounded,
+                            danger: true,
+                            isWhite: isWhite,
+                            onPressed: _cancelTransfer,
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _buildStatusCard(isWhite, p),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1785,105 +1854,206 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isWhite = _whiteTheme;
+    final p = GlassPalette(isWhite);
     final history = widget.settings.history;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Настройки · v$kAppVersion')),
-      body: ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        padding: const EdgeInsets.all(16),
-        children: [
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Белый фон'),
-            subtitle: Text(_whiteTheme ? 'Включён белый фон' : 'Включён OLED-чёрный фон'),
-            value: _whiteTheme,
-            onChanged: (val) {
-              setState(() => _whiteTheme = val);
-              widget.onThemeChanged(val);
-            },
-          ),
-          const Divider(height: 28),
-          const Text('Папка сохранения', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _dirController,
-            decoration: InputDecoration(
-              hintText: 'По умолчанию (Download / Documents)',
-              border: OutlineInputBorder(borderRadius: kPillRadius),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.folder_open_rounded),
-                onPressed: _pickFolder,
-              ),
-            ),
-            onSubmitted: (val) => widget.onSaveDirChanged(val.trim().isEmpty ? null : val.trim()),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
+    return LiquidBackground(
+      isWhite: isWhite,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
-              ActionChip(
-                label: const Text('Выбрать папку'),
-                onPressed: _pickFolder,
+              Row(
+                children: [
+                  GlassIconButton(
+                    icon: Icons.arrow_back_ios_new_rounded,
+                    isWhite: isWhite,
+                    onTap: () => Navigator.of(context).pop(),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'Настройки · v$kAppVersion',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: p.fg,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 44),
+                ],
               ),
-              if (Platform.isAndroid)
-                ActionChip(
-                  label: const Text('/storage/emulated/0/Download'),
-                  onPressed: () {
-                    const p = '/storage/emulated/0/Download';
-                    _dirController.text = p;
-                    widget.onSaveDirChanged(p);
-                  },
+              const SizedBox(height: 18),
+              GlassCard(
+                isWhite: isWhite,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Белый фон',
+                            style: TextStyle(
+                              color: p.fg,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _whiteTheme ? 'Включён белый фон' : 'Включён OLED-чёрный фон',
+                            style: TextStyle(color: p.subtle, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: _whiteTheme,
+                      activeColor: Colors.white,
+                      activeTrackColor: p.accent,
+                      onChanged: (val) {
+                        setState(() => _whiteTheme = val);
+                        widget.onThemeChanged(val);
+                      },
+                    ),
+                  ],
                 ),
-              ActionChip(
-                label: const Text('По умолчанию'),
-                onPressed: () {
-                  _dirController.clear();
-                  widget.onSaveDirChanged(null);
-                },
+              ),
+              const SizedBox(height: 16),
+              GlassCard(
+                isWhite: isWhite,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GlassLabel('ПАПКА СОХРАНЕНИЯ', isWhite: isWhite),
+                    const SizedBox(height: 12),
+                    GlassTextField(
+                      controller: _dirController,
+                      isWhite: isWhite,
+                      hint: 'По умолчанию (Download / Documents)',
+                      onSubmitted: (val) =>
+                          widget.onSaveDirChanged(val.trim().isEmpty ? null : val.trim()),
+                      suffix: IconButton(
+                        icon: Icon(Icons.folder_open_rounded, color: p.subtle),
+                        onPressed: _pickFolder,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        GlassChip(
+                          label: 'Выбрать папку',
+                          icon: Icons.folder_rounded,
+                          isWhite: isWhite,
+                          onTap: _pickFolder,
+                        ),
+                        if (Platform.isAndroid)
+                          GlassChip(
+                            label: '/storage/emulated/0/Download',
+                            isWhite: isWhite,
+                            onTap: () {
+                              const path = '/storage/emulated/0/Download';
+                              _dirController.text = path;
+                              widget.onSaveDirChanged(path);
+                            },
+                          ),
+                        GlassChip(
+                          label: 'По умолчанию',
+                          isWhite: isWhite,
+                          onTap: () {
+                            _dirController.clear();
+                            widget.onSaveDirChanged(null);
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              GlassCard(
+                isWhite: isWhite,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        GlassLabel('ИСТОРИЯ (${history.length})', isWhite: isWhite),
+                        if (history.isNotEmpty)
+                          GlassChip(
+                            label: 'Очистить',
+                            isWhite: isWhite,
+                            onTap: () async {
+                              await widget.onClearHistory();
+                              if (mounted) setState(() {});
+                            },
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (history.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        child: Text(
+                          'История пока пуста',
+                          style: TextStyle(color: p.subtle, fontSize: 14),
+                        ),
+                      )
+                    else
+                      ...history.map((item) {
+                        final dt =
+                            '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}';
+                        final received = item.direction == 'Принято';
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 7),
+                          child: Row(
+                            children: [
+                              Icon(
+                                received ? Icons.download_done_rounded : Icons.check_circle_outline_rounded,
+                                size: 22,
+                                color: received ? p.accent : p.success,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.fileName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: p.fg,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${item.direction} · ${_formatBytes(item.sizeBytes)} · $dt',
+                                      style: TextStyle(color: p.subtle, fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                  ],
+                ),
               ),
             ],
           ),
-          const Divider(height: 28),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('История (${history.length})', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-              if (history.isNotEmpty)
-                TextButton(
-                  onPressed: () async {
-                    await widget.onClearHistory();
-                    if (mounted) setState(() {});
-                  },
-                  child: const Text('Очистить'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          if (history.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Text('История пока пуста', style: TextStyle(color: Colors.grey)),
-            )
-          else
-            ...history.map((item) {
-              final dt =
-                  '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}';
-              return ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  item.direction == 'Принято' ? Icons.download_done_rounded : Icons.check_circle_outline_rounded,
-                ),
-                title: Text(item.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(
-                  '${item.direction} · ${_formatBytes(item.sizeBytes)} · $dt',
-                  style: const TextStyle(fontSize: 12),
-                ),
-              );
-            }),
-        ],
+        ),
       ),
     );
   }
