@@ -829,7 +829,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
 _activeIncomingClient = client;
 _activeRaf = null;
 _activeReceivedFilePath = null;
-
    final saveDir = await _resolveSaveDirectory();
 
     RandomAccessFile? raf;
@@ -859,17 +858,15 @@ _activeReceivedFilePath = null;
           }
 
           relPath = _sanitizeRelativePath(parts[0]);
-         _activeRaf = raf;
-          _activeReceivedFilePath = outFile.path;
-
-           totalSize = int.tryParse(parts[1]) ?? 0;
-
-          final outFile = File('${saveDir.path}/$relPath');
+                 totalSize = int.tryParse(parts[1]) ?? 0;
+           final outFile = File('${saveDir.path}/$relPath');
           await outFile.parent.create(recursive: true);
           raf = await outFile.open(mode: FileMode.writeOnlyAppend);
           receivedBytes = await raf.length();
 
           client.write('$receivedBytes\n');
+         _activeRaf = raf;
+          _activeReceivedFilePath = outFile.path;
           await client.flush();
 
           headerParsed = true;
@@ -877,7 +874,7 @@ _activeReceivedFilePath = null;
 
           setState(() {
             _currentFileName = relPath;
-           if (_receiveCancelled) break;
+
 
             _totalBytes = totalSize;
             _transferredBytes = receivedBytes;
@@ -887,6 +884,7 @@ _activeReceivedFilePath = null;
 
         if (offset < data.length) {
           final chunk = Uint8List.sublistView(data, offset);
+           if (_receiveCancelled) break;
           await raf!.writeFrom(chunk);
           receivedBytes += chunk.length;
           bytesInInterval += chunk.length;
