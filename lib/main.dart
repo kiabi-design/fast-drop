@@ -3,12 +3,15 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:android_intent_plus/flag.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'screens/incoming_text_screen.dart';
 import 'screens/transfer_screen.dart';
@@ -24,6 +27,26 @@ const int kChunkSize = 1024 * 1024;
 /// false: выбранные файлы попадают в список «ВЫБРАНО», отправка по кнопке «Отправить (N)».
 /// true: после выбора файлов отправка начинается сразу.
 const bool kSendImmediately = false;
+
+/// Собственная папка приложения для принятых файлов.
+/// Android: Download/FastDrop, iPhone: «Файлы» → FastDrop → FastDrop.
+Future<Directory> resolveDefaultSaveDirectory() async {
+  Directory dir;
+  if (Platform.isAndroid) {
+    dir = Directory('/storage/emulated/0/Download/FastDrop');
+  } else {
+    final docs = await getApplicationDocumentsDirectory();
+    dir = Directory('${docs.path}/FastDrop');
+  }
+  try {
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  } catch (_) {
+    return await getApplicationDocumentsDirectory();
+  }
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -358,14 +381,34 @@ class _TransferHomePageState extends State<TransferHomePage> {
   Future<void> _openReceivedFolder() async {
     final folder = _lastSavedFolder;
     if (folder == null || folder.isEmpty) return;
+
     try {
-      final result = await OpenFilex.open(folder);
-      if (result.type != ResultType.done) {
-        _toast('Файлы лежат в: $folder', seconds: 4);
+      if (Platform.isIOS) {
+        // Открывает приложение «Файлы» сразу в нужной папке.
+        final ok = await launchUrl(Uri.parse('shareddocuments://${Uri.encodeFull(folder)}'));
+        if (ok) return;
+      } else if (Platform.isAndroid) {
+        const root = '/storage/emulated/0/';
+        if (folder.startsWith(root)) {
+          final relative = folder.substring(root.length);
+          final data =
+              'content://com.android.externalstorage.documents/document/primary%3A${Uri.encodeComponent(relative)}';
+          for (final type in const ['vnd.android.document/directory', 'resource/folder']) {
+            try {
+              await AndroidIntent(
+                action: 'action_view',
+                data: data,
+                type: type,
+                flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+              ).launch();
+              return;
+            } catch (_) {}
+          }
+        }
       }
-    } catch (_) {
-      _toast('Файлы лежат в: $folder', seconds: 4);
-    }
+    } catch (_) {}
+
+    _toast('Файлы лежат в: $folder', seconds: 4);
   }
 
   Future<void> _initEnvironment() async {
@@ -379,6 +422,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
         ].request();
       } catch (_) {}
     }
+    // Создаём папку FastDrop сразу, чтобы она была видна в файлах.
+    try {
+      await _resolveSaveDirectory();
+    } catch (_) {}
   }
 
   Future<void> _refreshLocalIps() async {
@@ -476,11 +523,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
         return dir;
       } catch (_) {}
     }
-    if (Platform.isAndroid) {
-      final downloads = Directory('/storage/emulated/0/Download');
-      if (await downloads.exists()) return downloads;
-    }
-    return await getApplicationDocumentsDirectory();
+    return resolveDefaultSaveDirectory();
   }
 
   String _formatSize(int bytes) {
@@ -1256,14 +1299,26 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   void _openSettings() {
     _hideKeyboard();
+    if (_menuOpen) setState(() => _menuOpen = false);
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SettingsPage(
-          settings: widget.settings,
-          onThemeChanged: widget.onThemeChanged,
-          onSaveDirChanged: widget.onSaveDirChanged,
-          onClearHistory: widget.onClearHistory,
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 260),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (_, __, ___) => _SwipeToClose(
+          child: SettingsPage(
+            settings: widget.settings,
+            onThemeChanged: widget.onThemeChanged,
+            onSaveDirChanged: widget.onSaveDirChanged,
+            onClearHistory: widget.onClearHistory,
+          ),
         ),
+        transitionsBuilder: (_, animation, __, child) {
+          final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+          return SlideTransition(
+            position: Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero).animate(curved),
+            child: child,
+          );
+        },
       ),
     );
   }
@@ -1286,7 +1341,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
     return Row(
       children: [
         GlassIconButton(
-          icon: Icons.settings_rounded,
+          icon: Icons.menu_rounded,
           isWhite: isWhite,
           onTap: _openSettings,
         ),
@@ -1572,6 +1627,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
           _hideKeyboard();
           if (_menuOpen) setState(() => _menuOpen = false);
         },
+        onHorizontalDragEnd: (details) {
+          final v = details.primaryVelocity ?? 0;
+          if (v > 350) _openSettings();
+        },
         child: Scaffold(
           backgroundColor: Colors.transparent,
           body: SafeArea(
@@ -1735,6 +1794,24 @@ class _TransferHomePageState extends State<TransferHomePage> {
   }
 }
 
+/// Свайп влево закрывает экран настроек.
+class _SwipeToClose extends StatelessWidget {
+  final Widget child;
+  const _SwipeToClose({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragEnd: (details) {
+        final v = details.primaryVelocity ?? 0;
+        if (v < -350) Navigator.of(context).maybePop();
+      },
+      child: child,
+    );
+  }
+}
+
 // ───────────────────────── Настройки ─────────────────────────
 
 class SettingsPage extends StatefulWidget {
@@ -1874,7 +1951,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     GlassTextField(
                       controller: _dirController,
                       isWhite: isWhite,
-                      hint: 'По умолчанию (Download / Documents)',
+                      hint: Platform.isAndroid ? 'По умолчанию: Download/FastDrop' : 'По умолчанию: папка FastDrop',
                       onSubmitted: (val) =>
                           widget.onSaveDirChanged(val.trim().isEmpty ? null : val.trim()),
                       suffix: IconButton(
