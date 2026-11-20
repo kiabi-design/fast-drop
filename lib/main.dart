@@ -317,6 +317,14 @@ class _TransferHomePageState extends State<TransferHomePage> {
   bool _receiveCancelled = false;
   bool _transferScreenOpen = false;
   bool _menuOpen = false;
+  bool _showStatusCard = false;
+  Timer? _hideCardTimer;
+
+  // Статистика скорости текущей передачи (МБ/с).
+  int _statBytes = 0;
+  double _statSeconds = 0.0;
+  double _statMax = 0.0;
+  double? _statMin;
 
   Socket? _activeSendSocket;
   Socket? _activeIncomingClient;
@@ -365,6 +373,42 @@ class _TransferHomePageState extends State<TransferHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(text), duration: Duration(seconds: seconds)),
     );
+  }
+
+  void _scheduleHideStatusCard() {
+    _hideCardTimer?.cancel();
+    _hideCardTimer = Timer(const Duration(seconds: 10), () {
+      if (mounted && !_busy) {
+        setState(() => _showStatusCard = false);
+      }
+    });
+  }
+
+  void _resetStats() {
+    _statBytes = 0;
+    _statSeconds = 0.0;
+    _statMax = 0.0;
+    _statMin = null;
+  }
+
+  void _recordSpeed(int bytes, int elapsedMs) {
+    if (elapsedMs <= 0) return;
+    _statBytes += bytes;
+    _statSeconds += elapsedMs / 1000.0;
+    if (elapsedMs >= 150) {
+      final sp = (bytes / (1024 * 1024)) / (elapsedMs / 1000.0);
+      if (sp > _statMax) _statMax = sp;
+      final m = _statMin;
+      if (m == null || sp < m) _statMin = sp;
+    }
+  }
+
+  double? get _statAvg =>
+      _statSeconds > 0 ? (_statBytes / (1024 * 1024)) / _statSeconds : null;
+
+  String _statsLine() {
+    String f(double? v) => v == null ? '—' : v.toStringAsFixed(1);
+    return 'МБ/с: средняя ${f(_statAvg)} · макс ${f(_statMax > 0 ? _statMax : null)} · мин ${f(_statMin)}';
   }
 
   Future<void> _openReceivedFile(String path) async {
@@ -591,6 +635,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
       _speedMBps = 0.0;
       _status = 'Передача отменена';
     });
+    _scheduleHideStatusCard();
     if (mounted && _transferScreenOpen) {
       Navigator.of(context).pop();
     }
@@ -620,6 +665,9 @@ class _TransferHomePageState extends State<TransferHomePage> {
               statusText: _status,
               savedFilePath: _lastSavedPath,
               savedFolderPath: _lastSavedFolder,
+              maxSpeedMBps: _statMax > 0 ? _statMax : null,
+              minSpeedMBps: _statMin,
+              avgSpeedMBps: _statAvg,
               isWhiteTheme: widget.settings.isWhiteTheme,
               onCancel: _cancelTransfer,
               onDone: () => Navigator.of(ctx).pop(),
@@ -681,6 +729,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
         _isListening = false;
         _status = 'Приём остановлен';
       });
+      _toast('Приём остановлен');
       return;
     }
 
@@ -706,6 +755,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
         _speedMBps = 0.0;
       });
       _startBroadcastingPresence();
+      _toast('Приём включён, ожидание подключения', seconds: 2);
 
       server.listen(
         (Socket client) {
@@ -716,7 +766,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
         },
       );
     } catch (e) {
-      if (mounted) setState(() => _status = 'Ошибка приёма: $e');
+      if (mounted) {
+        setState(() => _status = 'Ошибка приёма: $e');
+        _toast('Ошибка приёма: $e', seconds: 4);
+      }
     }
   }
 
@@ -779,9 +832,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
           headerParsed = true;
           payload = Uint8List.sublistView(bytes, nl + 1);
+          _resetStats();
+          _hideCardTimer?.cancel();
 
           _ui(() {
             _isReceivingNow = true;
+            _showStatusCard = true;
             _transferCompleted = false;
             _currentFileName = relPath;
             _currentFileIndex = 0;
@@ -809,6 +865,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
           if (elapsedMs >= 200 || receivedBytes >= totalSize) {
             final sec = elapsedMs > 0 ? elapsedMs / 1000.0 : 0.001;
             final speed = (bytesInInterval / (1024 * 1024)) / sec;
+            _recordSpeed(bytesInInterval, elapsedMs);
             bytesInInterval = 0;
             lastSpeedUpdate = now;
 
@@ -867,8 +924,11 @@ class _TransferHomePageState extends State<TransferHomePage> {
         _transferredBytes = finalSize;
         _lastSavedPath = fullPath;
         _lastSavedFolder = File(fullPath).parent.path;
-        _status = 'Сохранено: $fullPath';
+        _status = 'Файл принят';
       });
+
+      final folderName = saveDir.uri.pathSegments.where((x) => x.isNotEmpty).lastOrNull ?? 'FastDrop';
+      _toast('Сохранено в папку $folderName', seconds: 2);
 
       await _openIncomingText(relPath, fullPath, finalSize, remoteIp);
     } catch (e) {
@@ -891,6 +951,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
       }
     } finally {
       _activeIncomingClient = null;
+      if (headerParsed) _scheduleHideStatusCard();
       try {
         await client.close();
       } catch (_) {}
@@ -954,7 +1015,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
     final data = await Clipboard.getData('text/plain');
     final text = data?.text ?? '';
     if (text.trim().isEmpty) {
-      _ui(() => _status = 'Буфер обмена пуст');
+      _toast('Буфер обмена пуст');
       return;
     }
     _addToQueue([_textItem(text, 'clipboard.txt')]);
@@ -1073,7 +1134,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
     }
 
     if (items.isEmpty) {
-      _ui(() => _status = 'Выбранная папка пуста');
+      _toast('Выбранная папка пуста');
       return;
     }
     _addToQueue(items);
@@ -1092,7 +1153,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
     final host = _ipController.text.trim();
     if (host.isEmpty) {
-      _ui(() => _status = 'Укажите IP получателя — список сохранён');
+      _toast('Укажите IP получателя', seconds: 2);
       return;
     }
 
@@ -1104,9 +1165,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
     _cancelRequested = false;
     final sent = <OutgoingItem>[];
+    _resetStats();
+    _hideCardTimer?.cancel();
 
     _ui(() {
       _menuOpen = false;
+      _showStatusCard = true;
       _isTransferring = true;
       _transferCompleted = false;
       _totalFilesCount = items.length;
@@ -1153,6 +1217,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
     } finally {
       _activeSendSocket = null;
       _ui(() => _isTransferring = false);
+      _scheduleHideStatusCard();
     }
   }
 
@@ -1253,6 +1318,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
           if (elapsedMs >= 200 || sentBytes >= item.sizeBytes) {
             final sec = elapsedMs > 0 ? elapsedMs / 1000.0 : 0.001;
             final speed = (bytesInInterval / (1024 * 1024)) / sec;
+            _recordSpeed(bytesInInterval, elapsedMs);
             bytesInInterval = 0;
             lastSpeedUpdate = now;
 
@@ -1327,6 +1393,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
   void dispose() {
     _beaconTimer?.cancel();
     _cleanupTimer?.cancel();
+    _hideCardTimer?.cancel();
     _udpSocket?.close();
     _ipController.dispose();
     _ipFocus.dispose();
@@ -1569,9 +1636,25 @@ class _TransferHomePageState extends State<TransferHomePage> {
                   letterSpacing: -0.5,
                 ),
               ),
-              Text(
-                _etaText,
-                style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: p.subtle),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _etaText,
+                    style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: p.subtle),
+                  ),
+                  if (!_busy) ...[
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        _hideCardTimer?.cancel();
+                        setState(() => _showStatusCard = false);
+                      },
+                      child: Icon(Icons.close_rounded, size: 22, color: p.subtle),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),
@@ -1609,6 +1692,13 @@ class _TransferHomePageState extends State<TransferHomePage> {
             _status,
             style: TextStyle(fontSize: 12, color: isError ? p.danger : p.fg),
           ),
+          if (!_busy && _statAvg != null && !isError) ...[
+            const SizedBox(height: 8),
+            Text(
+              _statsLine(),
+              style: TextStyle(fontSize: 12, color: p.subtle, fontFamily: 'monospace'),
+            ),
+          ],
         ],
       ),
     );
@@ -1782,8 +1872,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 18),
-                  _buildStatusCard(isWhite, p),
+                  if (_showStatusCard) ...[
+                    const SizedBox(height: 18),
+                    _buildStatusCard(isWhite, p),
+                  ],
                 ],
               ),
             ),
