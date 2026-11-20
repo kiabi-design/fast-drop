@@ -534,11 +534,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
     if (!lower.endsWith('.txt') || sizeBytes > 1024 * 1024) return;
     try {
       final content = await File(fullPath).readAsString();
-      if (!mounted) return;
+      if (!mounted || content.isEmpty) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => IncomingTextScreen(
-            text: content,
             fileName: relPath,
           ),
         ),
@@ -552,7 +551,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
       MaterialPageRoute(
         builder: (_) => TransferScreen(
           fileName: _currentFileName,
-          status: _status,
           progress: _progress,
           speedMBps: _speedMBps,
           transferredBytes: _transferredBytes,
