@@ -537,9 +537,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
       if (!mounted || content.isEmpty) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => IncomingTextScreen(
-            fileName: relPath,
-          ),
+builder: (_) => IncomingTextScreen(
+  senderName: 'Устройство',
+  messageText: content,
+),
         ),
       );
     } catch (_) {}
@@ -549,15 +550,24 @@ class _TransferHomePageState extends State<TransferHomePage> {
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => TransferScreen(
-          fileName: _currentFileName,
-          progress: _progress,
-          speedMBps: _speedMBps,
-          transferredBytes: _transferredBytes,
-          totalBytes: _totalBytes,
-          etaText: _etaText,
-          onCancel: _cancelTransfer,
-        ),
+builder: (_) => TransferScreen(
+  isSender: true,
+  isTransferring: _isTransferring,
+  isCompleted: !_isTransferring && _progress >= 1.0,
+  isCancelled: _cancelRequested,
+  fileName: _currentFileName,
+  currentIndex: _currentFileIndex,
+  totalCount: _totalFilesCount,
+  progress: _progress,
+  speedMBps: _speedMBps,
+  transferredBytes: _transferredBytes,
+  totalBytes: _totalBytes,
+  etaText: _etaText,
+  statusText: _status,
+  onCancel: _cancelTransfer,
+  onDone: () => Navigator.of(context).pop(),
+  onSendMore: () => Navigator.of(context).pop(),
+),
       ),
     );
   }
