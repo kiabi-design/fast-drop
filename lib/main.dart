@@ -456,7 +456,13 @@ class _TransferHomePageState extends State<TransferHomePage> {
   bool _isListening = false;
   bool _isTransferring = false;
   bool _cancelRequested = false;
+  bool _receiveCancelled = false;
+  bool _sendCancelled = false;
   Socket? _activeSendSocket;
+  Socket? _activeIncomingClient;
+  RandomAccessFile? _activeRaf;
+  String? _activeReceivedFilePath;
+  RandomAccessFile? _activeSendRaf;
   final List<OutgoingItem> _queuedItems = [];
 
   String _status = 'Готово · v$kAppVersion';
@@ -478,6 +484,19 @@ class _TransferHomePageState extends State<TransferHomePage> {
     super.initState();
     _initEnvironment();
   }
+
+  Future<void> _deletePartialReceivedFile() async {
+    final p = _activeReceivedFilePath;
+    _activeReceivedFilePath = null;
+    if (p == null || p.isEmpty) return;
+    try {
+      final f = File(p);
+      if (await f.exists()) {
+        await f.delete();
+      }
+    } catch (_) {}
+  }
+
   void _resetTransferCard({String? nextStatus}) {
     setState(() {
       _currentFileName = '';
@@ -496,12 +515,53 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   void _cancelTransfer() {
     _cancelRequested = true;
+    _sendCancelled = true;
+    _receiveCancelled = true;
     try {
       _activeSendSocket?.destroy();
+    } catch (_) {}
+    try {
+      _activeIncomingClient?.destroy();
     } catch (_) {}
     setState(() {
       _status = 'Отмена передачи...';
     });
+  }
+
+  Future<void> _openIncomingTextIfNeeded(String relPath, String fullPath, int sizeBytes) async {
+    if (!mounted) return;
+    final lower = relPath.toLowerCase();
+    if (!lower.endsWith('.txt') || sizeBytes > 1024 * 1024) return;
+    try {
+      final content = await File(fullPath).readAsString();
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => IncomingTextScreen(
+            text: content,
+            fileName: relPath,
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _openTransferScreen() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TransferScreen(
+          fileName: _currentFileName,
+          status: _status,
+          progress: _progress,
+          speedMBps: _speedMBps,
+          transferredBytes: _transferredBytes,
+          totalBytes: _totalBytes,
+          etaText: _etaText,
+          onCancel: _cancelTransfer,
+        ),
+      ),
+    );
   }
 
   void _removeQueuedItem(int index) {
@@ -601,6 +661,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
     final snapshot = List<OutgoingItem>.from(_queuedItems);
     _cancelRequested = false;
+    _sendCancelled = false;
 
     setState(() {
       _isTransferring = true;
@@ -611,7 +672,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
     try {
       for (int i = 0; i < snapshot.length; i++) {
-        if (_cancelRequested) {
+        if (_cancelRequested || _sendCancelled) {
           throw Exception('Передача отменена');
         }
         setState(() => _currentFileIndex = i + 1);
@@ -630,11 +691,13 @@ class _TransferHomePageState extends State<TransferHomePage> {
       setState(() {
         _queuedItems.removeWhere((item) => sentItems.contains(item));
         _speedMBps = 0.0;
-        _status = _cancelRequested ? 'Передача отменена' : 'Ошибка отправки: $e';
+        _status = (_cancelRequested || _sendCancelled) ? 'Передача отменена' : 'Ошибка отправки: $e';
       });
     } finally {
       _activeSendSocket = null;
+      _activeSendRaf = null;
       _cancelRequested = false;
+      _sendCancelled = false;
       setState(() {
         _isTransferring = false;
         _totalFilesCount = 0;
@@ -825,11 +888,11 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   Future<void> _handleIncomingClient(Socket client) async {
     client.setOption(SocketOption.tcpNoDelay, true);
- _receiveCancelled = false;
-_activeIncomingClient = client;
-_activeRaf = null;
-_activeReceivedFilePath = null;
-   final saveDir = await _resolveSaveDirectory();
+    _receiveCancelled = false;
+    _activeIncomingClient = client;
+    _activeRaf = null;
+    _activeReceivedFilePath = null;
+    final saveDir = await _resolveSaveDirectory();
 
     RandomAccessFile? raf;
     String relPath = 'received_file';
@@ -843,6 +906,7 @@ _activeReceivedFilePath = null;
 
     try {
       await for (final Uint8List data in client) {
+        if (_receiveCancelled) break;
         int offset = 0;
 
         if (!headerParsed) {
@@ -858,15 +922,15 @@ _activeReceivedFilePath = null;
           }
 
           relPath = _sanitizeRelativePath(parts[0]);
-                 totalSize = int.tryParse(parts[1]) ?? 0;
-           final outFile = File('${saveDir.path}/$relPath');
+          totalSize = int.tryParse(parts[1]) ?? 0;
+          final outFile = File('${saveDir.path}/$relPath');
           await outFile.parent.create(recursive: true);
           raf = await outFile.open(mode: FileMode.writeOnlyAppend);
           receivedBytes = await raf.length();
+          _activeRaf = raf;
+          _activeReceivedFilePath = outFile.path;
 
           client.write('$receivedBytes\n');
-         _activeRaf = raf;
-          _activeReceivedFilePath = outFile.path;
           await client.flush();
 
           headerParsed = true;
@@ -874,8 +938,6 @@ _activeReceivedFilePath = null;
 
           setState(() {
             _currentFileName = relPath;
-
-
             _totalBytes = totalSize;
             _transferredBytes = receivedBytes;
             _status = 'Приём: $relPath';
@@ -883,8 +945,8 @@ _activeReceivedFilePath = null;
         }
 
         if (offset < data.length) {
+          if (_receiveCancelled) break;
           final chunk = Uint8List.sublistView(data, offset);
-           if (_receiveCancelled) break;
           await raf!.writeFrom(chunk);
           receivedBytes += chunk.length;
           bytesInInterval += chunk.length;
@@ -910,32 +972,25 @@ _activeReceivedFilePath = null;
       await raf?.flush();
       await raf?.close();
 
+      if (_receiveCancelled) {
+        await _deletePartialReceivedFile();
+        if (mounted) {
+          setState(() {
+            _status = 'Приём отменён';
+            _speedMBps = 0.0;
+          });
+        }
+        return;
+      }
+
       final fullPath = '${saveDir.path}/$relPath';
+      final finalSize = receivedBytes > 0 ? receivedBytes : totalSize;
       widget.onAddHistory(
         TransferHistoryItem(
           fileName: relPath,
-          sizeBytes: receivedBytes > 0 ? receivedBytes : totalSize,
+          sizeBytes: finalSize,
           direction: 'Принято',
           savedPath: fullPath,
-} catch (e) {
-  await raf?.close();
-  if (_receiveCancelled) {
-    await _deletePartialReceivedFile();
-    if (mounted) {
-      setState(() {
-        _status = 'Приём отменён';
-        _speedMBps = 0.0;
-      });
-    }
-  } else if (mounted) {
-    setState(() => _status = 'Ошибка приёма: $e');
-  }
-} finally {
-  _activeIncomingClient = null;
-  _activeRaf = null;
-  await client.close();
-}
-
           timestamp: DateTime.now(),
         ),
       );
@@ -946,10 +1001,24 @@ _activeReceivedFilePath = null;
         _etaText = '00:00';
         _status = 'Сохранено: $fullPath';
       });
+
+      await _openIncomingTextIfNeeded(relPath, fullPath, finalSize);
     } catch (e) {
       await raf?.close();
-      setState(() => _status = 'Ошибка приёма: $e');
+      if (_receiveCancelled) {
+        await _deletePartialReceivedFile();
+        if (mounted) {
+          setState(() {
+            _status = 'Приём отменён';
+            _speedMBps = 0.0;
+          });
+        }
+      } else if (mounted) {
+        setState(() => _status = 'Ошибка приёма: $e');
+      }
     } finally {
+      _activeIncomingClient = null;
+      _activeRaf = null;
       await client.close();
     }
   }
@@ -1203,6 +1272,9 @@ _activeReceivedFilePath = null;
   }) async {
     if (_isTransferring) return;
 
+    _sendCancelled = false;
+    _cancelRequested = false;
+
     setState(() {
       _isTransferring = true;
       _totalFilesCount = items.length;
@@ -1210,23 +1282,29 @@ _activeReceivedFilePath = null;
 
     try {
       for (int i = 0; i < items.length; i++) {
+        if (_sendCancelled || _cancelRequested) {
+          throw Exception('Передача отменена');
+        }
         setState(() => _currentFileIndex = i + 1);
         await _sendSingleItem(host, items[i]);
       }
 
       setState(() {
-      _sendCancelled = false;
-      _activeSendRaf = null;
-
         _progress = 1.0;
         _speedMBps = 0.0;
-        _activeSendSocket = socket;
         _etaText = '00:00';
         _status = summaryDone;
       });
     } catch (e) {
-      setState(() => _status = 'Ошибка отправки: $e');
+      setState(() {
+        _speedMBps = 0.0;
+        _status = (_sendCancelled || _cancelRequested) ? 'Передача отменена' : 'Ошибка отправки: $e';
+      });
     } finally {
+      _activeSendSocket = null;
+      _activeSendRaf = null;
+      _sendCancelled = false;
+      _cancelRequested = false;
       setState(() {
         _isTransferring = false;
         _totalFilesCount = 0;
@@ -1254,6 +1332,7 @@ _activeReceivedFilePath = null;
         timeout: const Duration(seconds: 6),
       );
       socket.setOption(SocketOption.tcpNoDelay, true);
+      _activeSendSocket = socket;
 
       socket.write('${item.relativeName}|${item.sizeBytes}\n');
       await socket.flush();
@@ -1270,16 +1349,12 @@ _activeReceivedFilePath = null;
           if (nl != -1 && !completer.isCompleted) {
             final offsetStr = utf8.decode(bytes.sublist(0, nl)).trim();
             completer.complete(int.tryParse(offsetStr) ?? 0);
-            _activeSendRaf = raf;
-
             sub.pause();
           }
         },
         onError: (e) {
           if (!completer.isCompleted) completer.completeError(e);
         },
-        if (_sendCancelled) break;
-
         onDone: () {
           if (!completer.isCompleted) completer.complete(0);
         },
@@ -1288,13 +1363,17 @@ _activeReceivedFilePath = null;
       final startOffset = await completer.future.timeout(const Duration(seconds: 5));
       await sub.cancel();
 
+      if (_sendCancelled || _cancelRequested) {
+        throw Exception('Передача отменена');
+      }
+
       int sentBytes = startOffset.clamp(0, item.sizeBytes);
       int bytesInInterval = 0;
       DateTime lastSpeedUpdate = DateTime.now();
 
       if (item.rawBytes != null) {
         final raw = item.rawBytes!;
-        if (sentBytes < raw.length) {
+        if (sentBytes < raw.length && !_sendCancelled && !_cancelRequested) {
           final slice = Uint8List.sublistView(raw, sentBytes);
           socket.add(slice);
           await socket.flush();
@@ -1307,13 +1386,16 @@ _activeReceivedFilePath = null;
         }
       } else if (item.file != null) {
         raf = await item.file!.open(mode: FileMode.read);
+        _activeSendRaf = raf;
         await raf.setPosition(sentBytes);
 
         while (sentBytes < item.sizeBytes) {
+          if (_sendCancelled || _cancelRequested) break;
           final remaining = item.sizeBytes - sentBytes;
           final toRead = remaining < kChunkSize ? remaining : kChunkSize;
           final buffer = await raf.read(toRead);
           if (buffer.isEmpty) break;
+          if (_sendCancelled || _cancelRequested) break;
 
           socket.add(buffer);
           await socket.flush();
@@ -1338,6 +1420,11 @@ _activeReceivedFilePath = null;
           }
         }
         await raf.close();
+        _activeSendRaf = null;
+      }
+
+      if (_sendCancelled || _cancelRequested) {
+        throw Exception('Передача отменена');
       }
 
       await socket.close();
@@ -1353,6 +1440,7 @@ _activeReceivedFilePath = null;
       );
     } catch (e) {
       await raf?.close();
+      _activeSendRaf = null;
       socket?.destroy();
       rethrow;
     }
@@ -1646,7 +1734,7 @@ _activeReceivedFilePath = null;
                 const SizedBox(height: 14),
               ],
 
-                            Center(
+              Center(
                 child: Wrap(
                   spacing: 10,
                   runSpacing: 10,
@@ -1661,6 +1749,14 @@ _activeReceivedFilePath = null;
                     ),
                     if (_isTransferring)
                       LiquidGlassButton(
+                        label: 'Экран передачи',
+                        icon: Icons.open_in_full_rounded,
+                        active: false,
+                        isWhiteTheme: isWhite,
+                        onPressed: _openTransferScreen,
+                      ),
+                    if (_isTransferring)
+                      LiquidGlassButton(
                         label: 'Отмена',
                         icon: Icons.close_rounded,
                         active: true,
@@ -1670,7 +1766,6 @@ _activeReceivedFilePath = null;
                   ],
                 ),
               ),
-
 
               const SizedBox(height: 16),
 
