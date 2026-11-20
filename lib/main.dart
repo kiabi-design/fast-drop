@@ -16,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'screens/incoming_text_screen.dart';
 import 'screens/transfer_screen.dart';
 import 'widgets/liquid_glass.dart';
+import 'widgets/receive_hero.dart';
 import 'widgets/send_morph_bar.dart';
 
 const String kAppVersion = '1.2';
@@ -92,11 +93,13 @@ class TransferHistoryItem {
 class DiscoveredPeer {
   final String ip;
   final String name;
+  final String os;
   DateTime lastSeen;
 
   DiscoveredPeer({
     required this.ip,
     required this.name,
+    required this.os,
     required this.lastSeen,
   });
 }
@@ -120,11 +123,13 @@ class OutgoingItem {
 class AppSettings {
   bool isWhiteTheme;
   String? customSaveDir;
+  String? deviceName;
   List<TransferHistoryItem> history;
 
   AppSettings({
     this.isWhiteTheme = false,
     this.customSaveDir,
+    this.deviceName,
     List<TransferHistoryItem>? history,
   }) : history = history ?? [];
 }
@@ -147,6 +152,7 @@ class SettingsStorage {
       return AppSettings(
         isWhiteTheme: data['isWhiteTheme'] as bool? ?? false,
         customSaveDir: data['customSaveDir'] as String?,
+        deviceName: data['deviceName'] as String?,
         history: histRaw,
       );
     } catch (_) {
@@ -160,6 +166,7 @@ class SettingsStorage {
       final payload = {
         'isWhiteTheme': settings.isWhiteTheme,
         'customSaveDir': settings.customSaveDir,
+        'deviceName': settings.deviceName,
         'history': settings.history.map((e) => e.toJson()).toList(),
       };
       await file.writeAsString(jsonEncode(payload), flush: true);
@@ -192,6 +199,7 @@ class _FastDropAppState extends State<FastDropApp> {
     setState(() {
       _settings.isWhiteTheme = loaded.isWhiteTheme;
       _settings.customSaveDir = loaded.customSaveDir;
+      _settings.deviceName = loaded.deviceName;
       _settings.history
         ..clear()
         ..addAll(loaded.history);
@@ -206,6 +214,11 @@ class _FastDropAppState extends State<FastDropApp> {
 
   Future<void> _updateSaveDir(String? path) async {
     setState(() => _settings.customSaveDir = path);
+    await SettingsStorage.save(_settings);
+  }
+
+  Future<void> _updateDeviceName(String? name) async {
+    setState(() => _settings.deviceName = name);
     await SettingsStorage.save(_settings);
   }
 
@@ -267,6 +280,7 @@ class _FastDropAppState extends State<FastDropApp> {
               settings: _settings,
               onThemeChanged: _updateTheme,
               onSaveDirChanged: _updateSaveDir,
+              onDeviceNameChanged: _updateDeviceName,
               onAddHistory: _addHistory,
               onClearHistory: _clearHistory,
             ),
@@ -280,6 +294,7 @@ class TransferHomePage extends StatefulWidget {
   final AppSettings settings;
   final ValueChanged<bool> onThemeChanged;
   final ValueChanged<String?> onSaveDirChanged;
+  final ValueChanged<String?> onDeviceNameChanged;
   final ValueChanged<TransferHistoryItem> onAddHistory;
   final Future<void> Function() onClearHistory;
 
@@ -288,6 +303,7 @@ class TransferHomePage extends StatefulWidget {
     required this.settings,
     required this.onThemeChanged,
     required this.onSaveDirChanged,
+    required this.onDeviceNameChanged,
     required this.onAddHistory,
     required this.onClearHistory,
   });
@@ -296,7 +312,7 @@ class TransferHomePage extends StatefulWidget {
   State<TransferHomePage> createState() => _TransferHomePageState();
 }
 
-class _TransferHomePageState extends State<TransferHomePage> {
+class _TransferHomePageState extends State<TransferHomePage> with WidgetsBindingObserver {
   final TextEditingController _ipController = TextEditingController(text: '172.20.10.1');
   final FocusNode _ipFocus = FocusNode();
 
@@ -317,6 +333,8 @@ class _TransferHomePageState extends State<TransferHomePage> {
   bool _receiveCancelled = false;
   bool _transferScreenOpen = false;
   bool _menuOpen = false;
+  bool _receiveEnabled = true;
+  String? _listenError;
   bool _showStatusCard = false;
   Timer? _hideCardTimer;
 
@@ -350,9 +368,26 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   bool get _busy => _isTransferring || _isReceivingNow;
 
+  String get _myOs => Platform.isIOS ? 'iPhone' : (Platform.isAndroid ? 'Android' : 'Device');
+
+  String get _myName {
+    final custom = widget.settings.deviceName?.trim();
+    if (custom != null && custom.isNotEmpty) return custom;
+    return _myOs == 'Device' ? 'Устройство' : _myOs;
+  }
+
+  ReceiveState get _receiveState {
+    if (_isReceivingNow) return ReceiveState.receiving;
+    if (_isTransferring) return ReceiveState.sending;
+    if (_isListening) return ReceiveState.waiting;
+    if (_listenError != null) return ReceiveState.error;
+    return ReceiveState.off;
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initEnvironment();
   }
 
@@ -455,9 +490,32 @@ class _TransferHomePageState extends State<TransferHomePage> {
     _toast('Файлы лежат в: $folder', seconds: 4);
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _restartNetwork();
+    }
+  }
+
+  /// После возврата в приложение сокеты могли «уснуть» — пересоздаём их.
+  Future<void> _restartNetwork() async {
+    if (_busy) return;
+    await _refreshLocalIps();
+    await _startUdpRadar();
+    if (_receiveEnabled) {
+      try {
+        await _server?.close();
+      } catch (_) {}
+      _server = null;
+      _isListening = false;
+      await _startReceiving(quiet: true);
+    }
+  }
+
   Future<void> _initEnvironment() async {
     await _refreshLocalIps();
     await _startUdpRadar();
+    await _startReceiving(quiet: true);
     if (Platform.isAndroid) {
       try {
         await [
@@ -494,6 +552,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   Future<void> _startUdpRadar() async {
     try {
+      _cleanupTimer?.cancel();
+      try {
+        _udpSocket?.close();
+      } catch (_) {}
+      _udpSocket = null;
+
       final socket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         kDiscoveryPort,
@@ -507,17 +571,34 @@ class _TransferHomePageState extends State<TransferHomePage> {
         final dg = socket.receive();
         if (dg == null) return;
         final msg = utf8.decode(dg.data, allowMalformed: true).trim();
-        if (!msg.startsWith('FASTDROP_READY|')) return;
+        const prefix = 'FASTDROP_READY|';
+        if (!msg.startsWith(prefix)) return;
         final senderIp = dg.address.address;
         if (_myIps.contains(senderIp)) return;
-        final label = msg.substring('FASTDROP_READY|'.length);
+
+        // Формат: FASTDROP_READY|<ОС>|<название>. Старый формат: FASTDROP_READY|<ОС>.
+        final parts = msg.substring(prefix.length).split('|');
+        final os = parts[0].trim().isEmpty ? 'Device' : parts[0].trim();
+        final name = (parts.length > 1 && parts[1].trim().isNotEmpty)
+            ? parts[1].trim()
+            : (os == 'Device' ? 'Устройство' : os);
+
         if (!mounted) return;
+        final isNew = !_peers.containsKey(senderIp);
         setState(() {
           _peers[senderIp] = DiscoveredPeer(
             ip: senderIp,
-            name: label.isEmpty ? 'Устройство' : label,
+            name: name,
+            os: os,
             lastSeen: DateTime.now(),
           );
+          // Первое найденное устройство подставляем в поле IP, если оно не менялось.
+          if (isNew) {
+            final cur = _ipController.text.trim();
+            if (cur.isEmpty || cur == '172.20.10.1' || cur == '192.168.1.') {
+              _ipController.text = senderIp;
+            }
+          }
         });
       });
 
@@ -533,12 +614,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   void _startBroadcastingPresence() {
     _beaconTimer?.cancel();
-    final osName = Platform.isIOS ? 'iPhone' : (Platform.isAndroid ? 'Android' : 'Device');
-    final payload = utf8.encode('FASTDROP_READY|$osName');
 
     _beaconTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       final sock = _udpSocket;
       if (sock == null || !_isListening) return;
+      final safeName = _myName.replaceAll('|', ' ');
+      final payload = utf8.encode('FASTDROP_READY|$_myOs|$safeName');
       try {
         sock.send(payload, InternetAddress('255.255.255.255'), kDiscoveryPort);
       } catch (_) {}
@@ -718,21 +799,32 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   Future<void> _toggleReceive() async {
     _hideKeyboard();
+    if (_busy) return;
     if (_isListening) {
-      _beaconTimer?.cancel();
-      try {
-        await _server?.close();
-      } catch (_) {}
-      if (!mounted) return;
-      setState(() {
-        _server = null;
-        _isListening = false;
-        _status = 'Приём остановлен';
-      });
-      _toast('Приём остановлен');
-      return;
+      await _stopReceiving();
+      _toast('Приём выключен');
+    } else {
+      _receiveEnabled = true;
+      await _startReceiving();
     }
+  }
 
+  Future<void> _stopReceiving() async {
+    _receiveEnabled = false;
+    _beaconTimer?.cancel();
+    try {
+      await _server?.close();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _server = null;
+      _isListening = false;
+      _listenError = null;
+    });
+  }
+
+  Future<void> _startReceiving({bool quiet = false}) async {
+    if (_isListening && _server != null) return;
     await _refreshLocalIps();
     try {
       try {
@@ -750,12 +842,9 @@ class _TransferHomePageState extends State<TransferHomePage> {
       setState(() {
         _server = server;
         _isListening = true;
-        _status = 'Ожидание подключения (порт $kTransferPort)';
-        _progress = 0.0;
-        _speedMBps = 0.0;
+        _listenError = null;
       });
       _startBroadcastingPresence();
-      _toast('Приём включён, ожидание подключения', seconds: 2);
 
       server.listen(
         (Socket client) {
@@ -764,12 +853,22 @@ class _TransferHomePageState extends State<TransferHomePage> {
         onError: (Object e) {
           _ui(() => _status = 'Ошибка сервера: $e');
         },
+        onDone: () {
+          if (mounted && identical(_server, server)) {
+            setState(() {
+              _server = null;
+              _isListening = false;
+            });
+          }
+        },
       );
     } catch (e) {
-      if (mounted) {
-        setState(() => _status = 'Ошибка приёма: $e');
-        _toast('Ошибка приёма: $e', seconds: 4);
-      }
+      if (!mounted) return;
+      setState(() {
+        _isListening = false;
+        _listenError = '$e';
+      });
+      if (!quiet) _toast('Не удалось включить приём: $e', seconds: 4);
     }
   }
 
@@ -1375,6 +1474,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
             settings: widget.settings,
             onThemeChanged: widget.onThemeChanged,
             onSaveDirChanged: widget.onSaveDirChanged,
+            onDeviceNameChanged: widget.onDeviceNameChanged,
             onClearHistory: widget.onClearHistory,
           ),
         ),
@@ -1391,6 +1491,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _beaconTimer?.cancel();
     _cleanupTimer?.cancel();
     _hideCardTimer?.cancel();
@@ -1447,37 +1548,6 @@ class _TransferHomePageState extends State<TransferHomePage> {
     );
   }
 
-  Widget _buildIpCard(bool isWhite, GlassPalette p) {
-    return GlassCard(
-      isWhite: isWhite,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          GlassLabel('МОЙ IP', isWhite: isWhite),
-          const SizedBox(height: 12),
-          if (_myIps.isEmpty)
-            Text('Нет сети', style: TextStyle(color: p.subtle, fontSize: 14))
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _myIps.map((ip) {
-                return GlassChip(
-                  label: ip,
-                  mono: true,
-                  isWhite: isWhite,
-                  onTap: () {
-                    Clipboard.setData(ClipboardData(text: ip));
-                    _toast('Скопировано: $ip');
-                  },
-                );
-              }).toList(),
-            ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildPeersCard(bool isWhite, GlassPalette p) {
     return GlassCard(
       isWhite: isWhite,
@@ -1496,7 +1566,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
                 child: Row(
                   children: [
                     Icon(
-                      peer.name == 'iPhone' ? Icons.phone_iphone_rounded : Icons.phone_android_rounded,
+                      peer.os == 'iPhone' ? Icons.phone_iphone_rounded : Icons.phone_android_rounded,
                       color: selected ? p.accent : p.fg,
                       size: 24,
                     ),
@@ -1732,16 +1802,17 @@ class _TransferHomePageState extends State<TransferHomePage> {
                 children: [
                   _buildTopBar(isWhite, p),
                   const SizedBox(height: 18),
-                  _buildIpCard(isWhite, p),
-                  const SizedBox(height: 18),
-                  Center(
-                    child: GlassButton(
-                      label: _isListening ? 'Принимаю' : 'Принять',
-                      icon: _isListening ? Icons.stop_rounded : Icons.download_rounded,
-                      active: _isListening,
-                      isWhite: isWhite,
-                      onPressed: _toggleReceive,
-                    ),
+                  ReceiveHero(
+                    deviceName: _myName,
+                    ips: _myIps,
+                    state: _receiveState,
+                    isWhite: isWhite,
+                    isIos: Platform.isIOS,
+                    onTap: _toggleReceive,
+                    onCopyIp: (ip) {
+                      Clipboard.setData(ClipboardData(text: ip));
+                      _toast('Скопировано: $ip');
+                    },
                   ),
                   const SizedBox(height: 18),
                   if (_peers.isNotEmpty) ...[
@@ -1910,6 +1981,7 @@ class SettingsPage extends StatefulWidget {
   final AppSettings settings;
   final ValueChanged<bool> onThemeChanged;
   final ValueChanged<String?> onSaveDirChanged;
+  final ValueChanged<String?> onDeviceNameChanged;
   final Future<void> Function() onClearHistory;
 
   const SettingsPage({
@@ -1917,6 +1989,7 @@ class SettingsPage extends StatefulWidget {
     required this.settings,
     required this.onThemeChanged,
     required this.onSaveDirChanged,
+    required this.onDeviceNameChanged,
     required this.onClearHistory,
   });
 
@@ -1926,6 +1999,8 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late TextEditingController _dirController;
+  late TextEditingController _nameController;
+  Timer? _nameDebounce;
   late bool _whiteTheme;
 
   @override
@@ -1933,10 +2008,22 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _whiteTheme = widget.settings.isWhiteTheme;
     _dirController = TextEditingController(text: widget.settings.customSaveDir ?? '');
+    _nameController = TextEditingController(text: widget.settings.deviceName ?? '');
+    _nameController.addListener(() {
+      _nameDebounce?.cancel();
+      _nameDebounce = Timer(const Duration(milliseconds: 500), () {
+        var v = _nameController.text.trim();
+        if (v.length > 24) v = v.substring(0, 24);
+        if (v == (widget.settings.deviceName ?? '')) return;
+        widget.onDeviceNameChanged(v.isEmpty ? null : v);
+      });
+    });
   }
 
   @override
   void dispose() {
+    _nameDebounce?.cancel();
+    _nameController.dispose();
     _dirController.dispose();
     super.dispose();
   }
@@ -2028,6 +2115,27 @@ class _SettingsPageState extends State<SettingsPage> {
                         setState(() => _whiteTheme = val);
                         widget.onThemeChanged(val);
                       },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              GlassCard(
+                isWhite: isWhite,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GlassLabel('НАЗВАНИЕ УСТРОЙСТВА', isWhite: isWhite),
+                    const SizedBox(height: 12),
+                    GlassTextField(
+                      controller: _nameController,
+                      isWhite: isWhite,
+                      hint: Platform.isIOS ? 'iPhone' : 'Android',
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Так вас видят другие устройства',
+                      style: TextStyle(color: p.subtle, fontSize: 12),
                     ),
                   ],
                 ),
