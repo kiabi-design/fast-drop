@@ -1,6 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
+
+import '../widgets/liquid_glass.dart';
 
 class TransferScreen extends StatelessWidget {
   final bool isSender;
@@ -63,254 +63,6 @@ class TransferScreen extends StatelessWidget {
     return '${size.toStringAsFixed(idx == 0 ? 0 : 2)} ${units[idx]}';
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final bg = isWhiteTheme ? const Color(0xFFF5F5F7) : const Color(0xFF0A0A0C);
-    final cardBg = isWhiteTheme ? Colors.white : const Color(0xFF16161A);
-    final borderColor =
-        isWhiteTheme ? Colors.black.withOpacity(0.08) : Colors.white.withOpacity(0.10);
-    final fg = isWhiteTheme ? const Color(0xFF111113) : Colors.white;
-    final subtle = isWhiteTheme ? const Color(0xFF6E6E73) : const Color(0xFF9E9EA6);
-
-    final clampedProgress = progress.clamp(0.0, 1.0);
-    final percentText = '${(clampedProgress * 100).toStringAsFixed(1)}%';
-    final canOpenReceivedFile = !isSender &&
-        savedFilePath != null &&
-        savedFilePath!.isNotEmpty &&
-        onOpenFile != null;
-
-    return PopScope(
-      canPop: !isTransferring,
-      child: Scaffold(
-        backgroundColor: bg,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      isSender ? 'Отправка' : 'Приём',
-                      style: TextStyle(
-                        color: subtle,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    if (totalCount > 0)
-                      Text(
-                        '$currentIndex / $totalCount',
-                        style: TextStyle(
-                          color: subtle,
-                          fontSize: 13,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                  ],
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: cardBg,
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: borderColor),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${speedMBps.toStringAsFixed(1)} МБ/с',
-                                  style: TextStyle(
-                                    color: fg,
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  etaText,
-                                  style: TextStyle(
-                                    color: subtle,
-                                    fontSize: 14,
-                                    fontFamily: 'monospace',
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (isTransferring)
-                            IconButton(
-                              onPressed: onCancel,
-                              icon: const Icon(Icons.close_rounded),
-                              tooltip: 'Отмена',
-                              color: fg,
-                              style: IconButton.styleFrom(
-                                backgroundColor: isWhiteTheme
-                                    ? Colors.black.withOpacity(0.06)
-                                    : Colors.white.withOpacity(0.10),
-                              ),
-                            )
-                          else if (!isSender && isCompleted && onOpenFolder != null)
-                            IconButton(
-                              onPressed: onOpenFolder,
-                              icon: const Icon(Icons.folder_open_rounded),
-                              color: fg,
-                              style: IconButton.styleFrom(
-                                backgroundColor: isWhiteTheme
-                                    ? Colors.black.withOpacity(0.06)
-                                    : Colors.white.withOpacity(0.10),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: LinearProgressIndicator(
-                          value: clampedProgress,
-                          minHeight: 7,
-                          backgroundColor: isWhiteTheme
-                              ? Colors.black.withOpacity(0.08)
-                              : Colors.white.withOpacity(0.12),
-                          valueColor: AlwaysStoppedAnimation<Color>(fg),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            percentText,
-                            style: TextStyle(
-                              color: fg,
-                              fontSize: 13,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                          Text(
-                            '${_formatSize(transferredBytes)} / ${_formatSize(totalBytes)}',
-                            style: TextStyle(
-                              color: subtle,
-                              fontSize: 13,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: canOpenReceivedFile
-                            ? () => onOpenFile!(savedFilePath!)
-                            : null,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  fileName.isNotEmpty ? fileName : 'Файл',
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: fg,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w500,
-                                    decoration: canOpenReceivedFile
-                                        ? TextDecoration.underline
-                                        : TextDecoration.none,
-                                  ),
-                                ),
-                              ),
-                              if (canOpenReceivedFile) ...[
-                                const SizedBox(width: 8),
-                                Icon(
-                                  _iconForPath(savedFilePath!),
-                                  size: 20,
-                                  color: subtle,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        statusText,
-                        style: TextStyle(
-                          color: subtle,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Spacer(),
-                if (isSender && !isTransferring) ...[
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: onDone,
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                          ),
-                          child: const Text('Готово'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: onSendMore,
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: borderColor),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                          ),
-                          child: Text(
-                            'Отправить ещё',
-                            style: TextStyle(color: fg),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ] else if (!isSender && !isTransferring) ...[
-                  FilledButton(
-                    onPressed: onDone,
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                    ),
-                    child: const Text('Готово'),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   IconData _iconForPath(String path) {
     final lower = path.toLowerCase();
     if (lower.endsWith('.apk')) return Icons.android_rounded;
@@ -321,5 +73,257 @@ class TransferScreen extends StatelessWidget {
       return Icons.image_rounded;
     }
     return Icons.open_in_new_rounded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = GlassPalette(isWhiteTheme);
+
+    final clamped = progress.clamp(0.0, 1.0).toDouble();
+    final percentText = '${(clamped * 100).toStringAsFixed(1)}%';
+    final isError = statusText.startsWith('Ошибка');
+    final isDone = !isTransferring && isCompleted && !isError;
+    final canOpenReceivedFile = !isSender &&
+        isDone &&
+        savedFilePath != null &&
+        savedFilePath!.isNotEmpty &&
+        onOpenFile != null;
+    final statusColor = isError ? p.danger : (isDone ? p.success : p.subtle);
+    final barColor = isError ? p.danger : (isDone ? p.success : p.accent);
+
+    return PopScope(
+      canPop: !isTransferring,
+      child: LiquidBackground(
+        isWhite: isWhiteTheme,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      GlassChip(
+                        label: isSender ? 'Отправка' : 'Приём',
+                        icon: isSender ? Icons.upload_rounded : Icons.download_rounded,
+                        isWhite: isWhiteTheme,
+                        selected: true,
+                        onTap: null,
+                      ),
+                      if (totalCount > 0)
+                        GlassChip(
+                          label: '$currentIndex / $totalCount',
+                          isWhite: isWhiteTheme,
+                          mono: true,
+                          onTap: null,
+                        ),
+                    ],
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: SingleChildScrollView(
+                        child: GlassCard(
+                          isWhite: isWhiteTheme,
+                          radius: 36,
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                                          textBaseline: TextBaseline.alphabetic,
+                                          children: [
+                                            Text(
+                                              speedMBps.toStringAsFixed(1),
+                                              style: TextStyle(
+                                                color: p.fg,
+                                                fontSize: 52,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: -1.5,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              'МБ/с',
+                                              style: TextStyle(
+                                                color: p.subtle,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          etaText,
+                                          style: TextStyle(
+                                            color: p.subtle,
+                                            fontSize: 15,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (isTransferring)
+                                    GlassIconButton(
+                                      icon: Icons.close_rounded,
+                                      isWhite: isWhiteTheme,
+                                      danger: true,
+                                      onTap: onCancel,
+                                    )
+                                  else ...[
+                                    if (isDone)
+                                      Icon(Icons.check_circle_rounded, color: p.success, size: 36),
+                                    if (!isSender && isCompleted && onOpenFolder != null) ...[
+                                      const SizedBox(width: 10),
+                                      GlassIconButton(
+                                        icon: Icons.folder_open_rounded,
+                                        isWhite: isWhiteTheme,
+                                        onTap: onOpenFolder,
+                                      ),
+                                    ],
+                                  ],
+                                ],
+                              ),
+                              const SizedBox(height: 22),
+                              GlassProgressBar(
+                                value: clamped,
+                                isWhite: isWhiteTheme,
+                                color: barColor,
+                                height: 12,
+                              ),
+                              const SizedBox(height: 12),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    percentText,
+                                    style: TextStyle(
+                                      color: p.fg,
+                                      fontSize: 13,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                  Text(
+                                    '${_formatSize(transferredBytes)} / ${_formatSize(totalBytes)}',
+                                    style: TextStyle(
+                                      color: p.subtle,
+                                      fontSize: 13,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 18),
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: canOpenReceivedFile ? () => onOpenFile!(savedFilePath!) : null,
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        fileName.isNotEmpty ? fileName : 'Файл',
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: p.fg,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
+                                          decoration: canOpenReceivedFile
+                                              ? TextDecoration.underline
+                                              : TextDecoration.none,
+                                        ),
+                                      ),
+                                    ),
+                                    if (canOpenReceivedFile) ...[
+                                      const SizedBox(width: 8),
+                                      Icon(_iconForPath(savedFilePath!), size: 20, color: p.subtle),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                statusText,
+                                style: TextStyle(
+                                  color: statusColor,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (isSender && !isTransferring) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: GlassButton(
+                            label: 'Готово',
+                            isWhite: isWhiteTheme,
+                            active: true,
+                            expand: true,
+                            onPressed: onDone,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: GlassButton(
+                            label: 'Отправить ещё',
+                            isWhite: isWhiteTheme,
+                            expand: true,
+                            onPressed: onSendMore,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else if (!isSender && !isTransferring) ...[
+                    if (canOpenReceivedFile) ...[
+                      GlassButton(
+                        label: 'Открыть файл',
+                        icon: Icons.open_in_new_rounded,
+                        isWhite: isWhiteTheme,
+                        expand: true,
+                        onPressed: () => onOpenFile!(savedFilePath!),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    GlassButton(
+                      label: 'Готово',
+                      isWhite: isWhiteTheme,
+                      active: true,
+                      expand: true,
+                      onPressed: onDone,
+                    ),
+                  ] else ...[
+                    GlassButton(
+                      label: 'Отмена',
+                      icon: Icons.close_rounded,
+                      isWhite: isWhiteTheme,
+                      danger: true,
+                      expand: true,
+                      onPressed: onCancel,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
