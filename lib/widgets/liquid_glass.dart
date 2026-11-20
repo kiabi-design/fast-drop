@@ -4,9 +4,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Включить (true) или выключить (false) медленно плывущий фон.
-/// Если на слабом телефоне будут тормоза, поставь false.
-const bool kAnimatedBackground = true;
+/// Анимация фона. false = фон неподвижный (по умолчанию).
+const bool kAnimatedBackground = false;
 
 // ───────────────────────── Палитра ─────────────────────────
 
@@ -41,10 +40,10 @@ class _BlobPainter extends CustomPainter {
   _BlobPainter(this.isWhite, {Listenable? repaint}) : super(repaint: repaint);
 
   static const List<_Blob> _dark = [
-    _Blob(0.15, 0.12, 0.80, 1, 0.00, 0.42, Color(0xFF2BB8FF)),
-    _Blob(0.90, 0.35, 0.85, 2, 0.30, 0.38, Color(0xFF7B5CFF)),
-    _Blob(0.18, 0.64, 0.75, 1, 0.55, 0.26, Color(0xFF19D3B0)),
-    _Blob(0.85, 0.92, 0.80, 3, 0.80, 0.30, Color(0xFFFF4FA3)),
+    _Blob(0.15, 0.10, 0.65, 1, 0.00, 0.16, Color(0xFF2BB8FF)),
+    _Blob(0.92, 0.38, 0.70, 2, 0.30, 0.13, Color(0xFF6A4DFF)),
+    _Blob(0.15, 0.68, 0.60, 1, 0.55, 0.08, Color(0xFF19D3B0)),
+    _Blob(0.88, 0.95, 0.65, 3, 0.80, 0.11, Color(0xFFFF4FA3)),
   ];
 
   static const List<_Blob> _light = [
@@ -58,7 +57,7 @@ class _BlobPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     // Фаза считается по часам, поэтому на всех экранах фон «плывёт» синхронно.
     final now = DateTime.now().millisecondsSinceEpoch;
-    final t = (now % 60000) / 60000.0;
+    final t = kAnimatedBackground ? (now % 60000) / 60000.0 : 0.0;
     final blobs = isWhite ? _light : _dark;
 
     for (final b in blobs) {
@@ -255,8 +254,8 @@ class GlassCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(radius);
 
-    Color top = isWhite ? Colors.white.withOpacity(0.62) : Colors.white.withOpacity(0.14);
-    Color bottom = isWhite ? Colors.white.withOpacity(0.32) : Colors.white.withOpacity(0.04);
+    Color top = isWhite ? Colors.white.withOpacity(0.62) : Colors.white.withOpacity(0.07);
+    Color bottom = isWhite ? Colors.white.withOpacity(0.32) : Colors.white.withOpacity(0.02);
     if (tint != null) {
       top = Color.alphaBlend(tint!.withOpacity(0.32), top);
       bottom = Color.alphaBlend(tint!.withOpacity(0.12), bottom);
