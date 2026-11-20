@@ -185,14 +185,6 @@ class TransferScreen extends StatelessWidget {
                                   else ...[
                                     if (isDone)
                                       Icon(Icons.check_circle_rounded, color: p.success, size: 36),
-                                    if (!isSender && isCompleted && onOpenFolder != null) ...[
-                                      const SizedBox(width: 10),
-                                      GlassIconButton(
-                                        icon: Icons.folder_open_rounded,
-                                        isWhite: isWhiteTheme,
-                                        onTap: onOpenFolder,
-                                      ),
-                                    ],
                                   ],
                                 ],
                               ),
@@ -298,6 +290,16 @@ class TransferScreen extends StatelessWidget {
                         isWhite: isWhiteTheme,
                         expand: true,
                         onPressed: () => onOpenFile!(savedFilePath!),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (!isSender && isDone && onOpenFolder != null) ...[
+                      GlassButton(
+                        label: 'Открыть папку',
+                        icon: Icons.folder_open_rounded,
+                        isWhite: isWhiteTheme,
+                        expand: true,
+                        onPressed: onOpenFolder,
                       ),
                       const SizedBox(height: 12),
                     ],
