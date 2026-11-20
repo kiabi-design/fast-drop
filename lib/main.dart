@@ -9,11 +9,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+
 import 'screens/incoming_text_screen.dart';
 import 'screens/transfer_screen.dart';
-import 'services/file_actions.dart';
 
 const String kAppVersion = '1.2';
+// Порты ниже 49152, чтобы не конфликтовать с эфемерными портами iOS.
 const int kTransferPort = 14680;
 const int kDiscoveryPort = 14681;
 const int kChunkSize = 1024 * 1024;
@@ -23,6 +24,8 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const FastDropApp());
 }
+
+// ───────────────────────── Модели ─────────────────────────
 
 class TransferHistoryItem {
   final String fileName;
@@ -134,6 +137,8 @@ class SettingsStorage {
   }
 }
 
+// ───────────────────────── Приложение ─────────────────────────
+
 class FastDropApp extends StatefulWidget {
   const FastDropApp({super.key});
 
@@ -153,6 +158,7 @@ class _FastDropAppState extends State<FastDropApp> {
 
   Future<void> _loadSettings() async {
     final loaded = await SettingsStorage.load();
+    if (!mounted) return;
     setState(() {
       _settings.isWhiteTheme = loaded.isWhiteTheme;
       _settings.customSaveDir = loaded.customSaveDir;
@@ -229,6 +235,8 @@ class _FastDropAppState extends State<FastDropApp> {
     );
   }
 }
+
+// ───────────────────────── Виджеты ─────────────────────────
 
 class LiquidGlassButton extends StatelessWidget {
   final String label;
@@ -424,6 +432,8 @@ class SendChoiceCard extends StatelessWidget {
   }
 }
 
+// ───────────────────────── Главный экран ─────────────────────────
+
 class TransferHomePage extends StatefulWidget {
   final AppSettings settings;
   final ValueChanged<bool> onThemeChanged;
@@ -448,22 +458,28 @@ class _TransferHomePageState extends State<TransferHomePage> {
   final TextEditingController _ipController = TextEditingController(text: '172.20.10.1');
   final FocusNode _ipFocus = FocusNode();
 
+  // Любое изменение состояния передачи увеличивает счётчик,
+  // благодаря чему TransferScreen обновляется «на лету».
+  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+
   ServerSocket? _server;
   RawDatagramSocket? _udpSocket;
   Timer? _beaconTimer;
   Timer? _cleanupTimer;
 
   bool _isListening = false;
-  bool _isTransferring = false;
+  bool _isTransferring = false; // идёт отправка
+  bool _isReceivingNow = false; // идёт приём
+  bool _transferCompleted = false;
   bool _cancelRequested = false;
   bool _receiveCancelled = false;
-  bool _sendCancelled = false;
+  bool _transferScreenOpen = false;
+
   Socket? _activeSendSocket;
   Socket? _activeIncomingClient;
-  RandomAccessFile? _activeRaf;
   String? _activeReceivedFilePath;
-  RandomAccessFile? _activeSendRaf;
-  final List<OutgoingItem> _queuedItems = [];
+  String? _lastSavedPath;
+  String? _lastSavedFolder;
 
   String _status = 'Готово · v$kAppVersion';
   String _currentFileName = '';
@@ -479,238 +495,19 @@ class _TransferHomePageState extends State<TransferHomePage> {
   List<String> _myIps = [];
   final Map<String, DiscoveredPeer> _peers = {};
 
+  bool get _busy => _isTransferring || _isReceivingNow;
+
   @override
   void initState() {
     super.initState();
     _initEnvironment();
   }
 
-  Future<void> _deletePartialReceivedFile() async {
-    final p = _activeReceivedFilePath;
-    _activeReceivedFilePath = null;
-    if (p == null || p.isEmpty) return;
-    try {
-      final f = File(p);
-      if (await f.exists()) {
-        await f.delete();
-      }
-    } catch (_) {}
-  }
-
-  void _resetTransferCard({String? nextStatus}) {
-    setState(() {
-      _currentFileName = '';
-      _currentFileIndex = 0;
-      _totalFilesCount = 0;
-      _progress = 0.0;
-      _speedMBps = 0.0;
-      _transferredBytes = 0;
-      _totalBytes = 0;
-      _etaText = '--:--';
-      if (nextStatus != null) {
-        _status = nextStatus;
-      }
-    });
-  }
-
-  void _cancelTransfer() {
-    _cancelRequested = true;
-    _sendCancelled = true;
-    _receiveCancelled = true;
-    try {
-      _activeSendSocket?.destroy();
-    } catch (_) {}
-    try {
-      _activeIncomingClient?.destroy();
-    } catch (_) {}
-    setState(() {
-      _status = 'Отмена передачи...';
-    });
-  }
-
-  Future<void> _openIncomingTextIfNeeded(String relPath, String fullPath, int sizeBytes) async {
+  /// setState + уведомление экрана передачи.
+  void _ui(VoidCallback fn) {
     if (!mounted) return;
-    final lower = relPath.toLowerCase();
-    if (!lower.endsWith('.txt') || sizeBytes > 1024 * 1024) return;
-    try {
-      final content = await File(fullPath).readAsString();
-      if (!mounted || content.isEmpty) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-builder: (_) => IncomingTextScreen(
-  senderName: 'Устройство',
-  messageText: content,
-),
-        ),
-      );
-    } catch (_) {}
-  }
-
-  Future<void> _openTransferScreen() async {
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-builder: (_) => TransferScreen(
-  isSender: true,
-  isTransferring: _isTransferring,
-  isCompleted: !_isTransferring && _progress >= 1.0,
-  isCancelled: _cancelRequested,
-  fileName: _currentFileName,
-  currentIndex: _currentFileIndex,
-  totalCount: _totalFilesCount,
-  progress: _progress,
-  speedMBps: _speedMBps,
-  transferredBytes: _transferredBytes,
-  totalBytes: _totalBytes,
-  etaText: _etaText,
-  statusText: _status,
-  onCancel: _cancelTransfer,
-  onDone: () => Navigator.of(context).pop(),
-  onSendMore: () => Navigator.of(context).pop(),
-),
-      ),
-    );
-  }
-
-  void _removeQueuedItem(int index) {
-    if (_isTransferring || index < 0 || index >= _queuedItems.length) return;
-    setState(() {
-      _queuedItems.removeAt(index);
-      if (_queuedItems.isEmpty) {
-        _status = 'Очередь очищена';
-      }
-    });
-  }
-
-  void _clearQueuedItems() {
-    if (_isTransferring) return;
-    setState(() {
-      _queuedItems.clear();
-      _status = 'Готово · v$kAppVersion';
-    });
-  }
-
-  Future<void> _addFilesToQueue() async {
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      withReadStream: false,
-    );
-    if (result == null || result.files.isEmpty) return;
-
-    final added = <OutgoingItem>[];
-    for (final f in result.files) {
-      if (f.path == null) continue;
-      final file = File(f.path!);
-      if (await file.exists()) {
-        final len = await file.length();
-        added.add(OutgoingItem(relativeName: f.name, sizeBytes: len, file: file));
-      }
-    }
-    if (added.isEmpty) return;
-
-    setState(() {
-      _queuedItems.addAll(added);
-      _status = 'Выбрано элементов: ${_queuedItems.length}';
-    });
-  }
-
-  Future<void> _addFolderToQueue() async {
-    final dirPath = await FilePicker.platform.getDirectoryPath();
-    if (dirPath == null || dirPath.trim().isEmpty) return;
-
-    final rootDir = Directory(dirPath);
-    if (!await rootDir.exists()) return;
-
-    final folderName = rootDir.uri.pathSegments.where((s) => s.isNotEmpty).lastOrNull ?? 'folder';
-    final normalizedRoot = rootDir.path.replaceAll('\\', '/');
-    final prefix = normalizedRoot.endsWith('/') ? normalizedRoot : '$normalizedRoot/';
-
-    final added = <OutgoingItem>[];
-    await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
-      if (entity is File) {
-        final p = entity.path.replaceAll('\\', '/');
-        final rel = p.startsWith(prefix) ? p.substring(prefix.length) : entity.uri.pathSegments.last;
-        final len = await entity.length();
-        added.add(
-          OutgoingItem(
-            relativeName: '$folderName/$rel',
-            sizeBytes: len,
-            file: entity,
-          ),
-        );
-      }
-    }
-
-    if (added.isEmpty) {
-      setState(() => _status = 'Выбранная папка пуста');
-      return;
-    }
-
-    setState(() {
-      _queuedItems.addAll(added);
-      _status = 'Добавлено из папки: ${added.length}';
-    });
-  }
-
-  Future<void> _startSendingQueue() async {
-    _hideKeyboard();
-    if (_isTransferring) return;
-
-    final host = _ipController.text.trim();
-    if (host.isEmpty) {
-      setState(() => _status = 'Укажите IP получателя — очередь сохранена');
-      return;
-    }
-
-    if (_queuedItems.isEmpty) {
-      await _openSendMenu();
-      return;
-    }
-
-    final snapshot = List<OutgoingItem>.from(_queuedItems);
-    _cancelRequested = false;
-    _sendCancelled = false;
-
-    setState(() {
-      _isTransferring = true;
-      _totalFilesCount = snapshot.length;
-    });
-
-    final sentItems = <OutgoingItem>[];
-
-    try {
-      for (int i = 0; i < snapshot.length; i++) {
-        if (_cancelRequested || _sendCancelled) {
-          throw Exception('Передача отменена');
-        }
-        setState(() => _currentFileIndex = i + 1);
-        await _sendSingleItem(host, snapshot[i]);
-        sentItems.add(snapshot[i]);
-      }
-
-      setState(() {
-        _queuedItems.removeWhere((item) => sentItems.contains(item));
-        _progress = 1.0;
-        _speedMBps = 0.0;
-        _etaText = '00:00';
-        _status = sentItems.length == 1 ? 'Файл отправлен' : 'Отправлено элементов: ${sentItems.length}';
-      });
-    } catch (e) {
-      setState(() {
-        _queuedItems.removeWhere((item) => sentItems.contains(item));
-        _speedMBps = 0.0;
-        _status = (_cancelRequested || _sendCancelled) ? 'Передача отменена' : 'Ошибка отправки: $e';
-      });
-    } finally {
-      _activeSendSocket = null;
-      _activeSendRaf = null;
-      _cancelRequested = false;
-      _sendCancelled = false;
-      setState(() {
-        _isTransferring = false;
-        _totalFilesCount = 0;
-      });
-    }
+    setState(fn);
+    _tick.value++;
   }
 
   void _hideKeyboard() {
@@ -719,14 +516,16 @@ builder: (_) => TransferScreen(
   }
 
   Future<void> _initEnvironment() async {
-    if (Platform.isAndroid) {
-      await [
-        Permission.storage,
-        Permission.manageExternalStorage,
-      ].request();
-    }
     await _refreshLocalIps();
     await _startUdpRadar();
+    if (Platform.isAndroid) {
+      try {
+        await [
+          Permission.storage,
+          Permission.manageExternalStorage,
+        ].request();
+      } catch (_) {}
+    }
   }
 
   Future<void> _refreshLocalIps() async {
@@ -747,44 +546,43 @@ builder: (_) => TransferScreen(
     } catch (_) {}
   }
 
+  // ───────────── UDP-радар ─────────────
+
   Future<void> _startUdpRadar() async {
     try {
-      _udpSocket = await RawDatagramSocket.bind(
+      final socket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         kDiscoveryPort,
         reuseAddress: true,
       );
-      _udpSocket!.broadcastEnabled = true;
+      socket.broadcastEnabled = true;
+      _udpSocket = socket;
 
-      _udpSocket!.listen((RawSocketEvent event) {
-        if (event == RawSocketEvent.read) {
-          final dg = _udpSocket!.receive();
-          if (dg == null) return;
-          final msg = utf8.decode(dg.data, allowMalformed: true).trim();
-          if (msg.startsWith('FASTDROP_READY|')) {
-            final senderIp = dg.address.address;
-            if (_myIps.contains(senderIp)) return;
-            final label = msg.substring('FASTDROP_READY|'.length);
-            if (mounted) {
-              setState(() {
-                _peers[senderIp] = DiscoveredPeer(
-                  ip: senderIp,
-                  name: label.isEmpty ? 'Устройство' : label,
-                  lastSeen: DateTime.now(),
-                );
-              });
-            }
-          }
-        }
+      socket.listen((RawSocketEvent event) {
+        if (event != RawSocketEvent.read) return;
+        final dg = socket.receive();
+        if (dg == null) return;
+        final msg = utf8.decode(dg.data, allowMalformed: true).trim();
+        if (!msg.startsWith('FASTDROP_READY|')) return;
+        final senderIp = dg.address.address;
+        if (_myIps.contains(senderIp)) return;
+        final label = msg.substring('FASTDROP_READY|'.length);
+        if (!mounted) return;
+        setState(() {
+          _peers[senderIp] = DiscoveredPeer(
+            ip: senderIp,
+            name: label.isEmpty ? 'Устройство' : label,
+            lastSeen: DateTime.now(),
+          );
+        });
       });
 
       _cleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
         final now = DateTime.now();
-        if (mounted) {
-          setState(() {
-            _peers.removeWhere((_, p) => now.difference(p.lastSeen).inSeconds > 5);
-          });
-        }
+        if (!mounted) return;
+        final before = _peers.length;
+        _peers.removeWhere((_, p) => now.difference(p.lastSeen).inSeconds > 5);
+        if (_peers.length != before) setState(() {});
       });
     } catch (_) {}
   }
@@ -795,30 +593,35 @@ builder: (_) => TransferScreen(
     final payload = utf8.encode('FASTDROP_READY|$osName');
 
     _beaconTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_udpSocket == null || !_isListening) return;
+      final sock = _udpSocket;
+      if (sock == null || !_isListening) return;
       try {
-        _udpSocket!.send(payload, InternetAddress('255.255.255.255'), kDiscoveryPort);
+        sock.send(payload, InternetAddress('255.255.255.255'), kDiscoveryPort);
       } catch (_) {}
       for (final ip in _myIps) {
         final parts = ip.split('.');
         if (parts.length == 4) {
           final bcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
           try {
-            _udpSocket!.send(payload, InternetAddress(bcast), kDiscoveryPort);
+            sock.send(payload, InternetAddress(bcast), kDiscoveryPort);
           } catch (_) {}
         }
       }
     });
   }
 
+  // ───────────── Вспомогательное ─────────────
+
   Future<Directory> _resolveSaveDirectory() async {
     final custom = widget.settings.customSaveDir;
     if (custom != null && custom.trim().isNotEmpty) {
-      final dir = Directory(custom.trim());
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
-      return dir;
+      try {
+        final dir = Directory(custom.trim());
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        return dir;
+      } catch (_) {}
     }
     if (Platform.isAndroid) {
       final downloads = Directory('/storage/emulated/0/Download');
@@ -847,43 +650,6 @@ builder: (_) => TransferScreen(
     return '$m:$s';
   }
 
-  Future<void> _toggleReceive() async {
-    _hideKeyboard();
-    if (_isListening) {
-      _beaconTimer?.cancel();
-      await _server?.close();
-      setState(() {
-        _server = null;
-        _isListening = false;
-        _status = 'Приём остановлен';
-      });
-      return;
-    }
-
-    await _refreshLocalIps();
-    try {
-      final server = await ServerSocket.bind(
-        InternetAddress.anyIPv4,
-        kTransferPort,
-        shared: true,
-      );
-      setState(() {
-        _server = server;
-        _isListening = true;
-        _status = 'Ожидание подключения (порт $kTransferPort)';
-        _progress = 0.0;
-        _speedMBps = 0.0;
-      });
-      _startBroadcastingPresence();
-
-      server.listen((Socket client) async {
-        await _handleIncomingClient(client);
-      });
-    } catch (e) {
-      setState(() => _status = 'Ошибка приёма: $e');
-    }
-  }
-
   String _sanitizeRelativePath(String raw) {
     final normalized = raw.replaceAll('\\', '/');
     final segments = normalized
@@ -894,70 +660,245 @@ builder: (_) => TransferScreen(
     return segments.isEmpty ? 'received_file' : segments.join('/');
   }
 
+  Future<void> _deletePartialReceivedFile() async {
+    final p = _activeReceivedFilePath;
+    _activeReceivedFilePath = null;
+    if (p == null || p.isEmpty) return;
+    try {
+      final f = File(p);
+      if (await f.exists()) {
+        await f.delete();
+      }
+    } catch (_) {}
+  }
+
+  // ───────────── Экраны ─────────────
+
+  void _cancelTransfer() {
+    _cancelRequested = true;
+    _receiveCancelled = true;
+    try {
+      _activeSendSocket?.destroy();
+    } catch (_) {}
+    try {
+      _activeIncomingClient?.destroy();
+    } catch (_) {}
+    _ui(() {
+      _isTransferring = false;
+      _isReceivingNow = false;
+      _speedMBps = 0.0;
+      _status = 'Передача отменена';
+    });
+    if (mounted && _transferScreenOpen) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _openTransferScreen({required bool isSender}) async {
+    if (!mounted || _transferScreenOpen) return;
+    _transferScreenOpen = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (ctx) => ValueListenableBuilder<int>(
+            valueListenable: _tick,
+            builder: (_, __, ___) => TransferScreen(
+              isSender: isSender,
+              isTransferring: _busy,
+              isCompleted: _transferCompleted,
+              isCancelled: _cancelRequested,
+              fileName: _currentFileName,
+              currentIndex: _currentFileIndex,
+              totalCount: _totalFilesCount,
+              progress: _progress,
+              speedMBps: _speedMBps,
+              transferredBytes: _transferredBytes,
+              totalBytes: _totalBytes,
+              etaText: _etaText,
+              statusText: _status,
+              savedFilePath: _lastSavedPath,
+              savedFolderPath: _lastSavedFolder,
+              isWhiteTheme: widget.settings.isWhiteTheme,
+              onCancel: _cancelTransfer,
+              onDone: () => Navigator.of(ctx).pop(),
+              onSendMore: () {
+                Navigator.of(ctx).pop();
+                _openSendMenu();
+              },
+            ),
+          ),
+        ),
+      );
+    } finally {
+      _transferScreenOpen = false;
+    }
+  }
+
+  Future<void> _openIncomingText(
+    String relPath,
+    String fullPath,
+    int sizeBytes,
+    String senderIp,
+  ) async {
+    if (!mounted) return;
+    final lower = relPath.toLowerCase();
+    if (!lower.endsWith('.txt') || sizeBytes > 1024 * 1024) return;
+    try {
+      final content = await File(fullPath).readAsString();
+      if (!mounted || content.isEmpty) return;
+      if (_transferScreenOpen) {
+        Navigator.of(context).pop();
+      }
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => IncomingTextScreen(
+            senderName: _peers[senderIp]?.name ?? 'Устройство',
+            deviceLabel: senderIp,
+            messageText: content,
+            isWhiteTheme: widget.settings.isWhiteTheme,
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
+  // ───────────── Приём ─────────────
+
+  Future<void> _toggleReceive() async {
+    _hideKeyboard();
+    if (_isListening) {
+      _beaconTimer?.cancel();
+      try {
+        await _server?.close();
+      } catch (_) {}
+      if (!mounted) return;
+      setState(() {
+        _server = null;
+        _isListening = false;
+        _status = 'Приём остановлен';
+      });
+      return;
+    }
+
+    await _refreshLocalIps();
+    try {
+      try {
+        await _server?.close();
+      } catch (_) {}
+      final server = await ServerSocket.bind(
+        InternetAddress.anyIPv4,
+        kTransferPort,
+        shared: true,
+      );
+      if (!mounted) {
+        await server.close();
+        return;
+      }
+      setState(() {
+        _server = server;
+        _isListening = true;
+        _status = 'Ожидание подключения (порт $kTransferPort)';
+        _progress = 0.0;
+        _speedMBps = 0.0;
+      });
+      _startBroadcastingPresence();
+
+      server.listen(
+        (Socket client) {
+          _handleIncomingClient(client);
+        },
+        onError: (Object e) {
+          _ui(() => _status = 'Ошибка сервера: $e');
+        },
+      );
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Ошибка приёма: $e');
+    }
+  }
+
   Future<void> _handleIncomingClient(Socket client) async {
     client.setOption(SocketOption.tcpNoDelay, true);
+    final remoteIp = client.remoteAddress.address;
     _receiveCancelled = false;
+    _cancelRequested = false;
     _activeIncomingClient = client;
-    _activeRaf = null;
     _activeReceivedFilePath = null;
-    final saveDir = await _resolveSaveDirectory();
 
     RandomAccessFile? raf;
     String relPath = 'received_file';
     int totalSize = 0;
     int receivedBytes = 0;
     bool headerParsed = false;
-    final headerBuffer = BytesBuilder(copy: false);
+    final headerBuffer = BytesBuilder(copy: true);
 
     int bytesInInterval = 0;
     DateTime lastSpeedUpdate = DateTime.now();
+    Directory? saveDir;
 
     try {
+      saveDir = await _resolveSaveDirectory();
+
       await for (final Uint8List data in client) {
         if (_receiveCancelled) break;
-        int offset = 0;
+        Uint8List payload = data;
 
         if (!headerParsed) {
           headerBuffer.add(data);
           final bytes = headerBuffer.toBytes();
           final nl = bytes.indexOf(10);
-          if (nl == -1) continue;
+          if (nl == -1) {
+            if (bytes.length > 16384) {
+              throw Exception('Некорректный заголовок');
+            }
+            continue;
+          }
 
-          final headerLine = utf8.decode(bytes.sublist(0, nl)).trim();
-          final parts = headerLine.split('|');
-          if (parts.length < 2) {
+          final headerLine = utf8.decode(bytes.sublist(0, nl), allowMalformed: true).trim();
+          final sep = headerLine.lastIndexOf('|');
+          if (sep <= 0) {
             throw Exception('Некорректный заголовок');
           }
 
-          relPath = _sanitizeRelativePath(parts[0]);
-          totalSize = int.tryParse(parts[1]) ?? 0;
+          relPath = _sanitizeRelativePath(headerLine.substring(0, sep));
+          totalSize = int.tryParse(headerLine.substring(sep + 1).trim()) ?? 0;
+
           final outFile = File('${saveDir.path}/$relPath');
           await outFile.parent.create(recursive: true);
-          raf = await outFile.open(mode: FileMode.writeOnlyAppend);
-          receivedBytes = await raf.length();
-          _activeRaf = raf;
+          // Всегда пишем файл с нуля, чтобы повторная отправка
+          // файла с тем же именем не ломалась.
+          raf = await outFile.open(mode: FileMode.write);
+          receivedBytes = 0;
           _activeReceivedFilePath = outFile.path;
 
-          client.write('$receivedBytes\n');
+          client.write('0\n');
           await client.flush();
 
           headerParsed = true;
-          offset = nl + 1;
+          payload = Uint8List.sublistView(bytes, nl + 1);
 
-          setState(() {
+          _ui(() {
+            _isReceivingNow = true;
+            _transferCompleted = false;
             _currentFileName = relPath;
+            _currentFileIndex = 0;
+            _totalFilesCount = 0;
             _totalBytes = totalSize;
-            _transferredBytes = receivedBytes;
+            _transferredBytes = 0;
+            _progress = 0.0;
+            _speedMBps = 0.0;
+            _etaText = '--:--';
             _status = 'Приём: $relPath';
           });
+          if (!_transferScreenOpen) {
+            unawaited(_openTransferScreen(isSender: false));
+          }
         }
 
-        if (offset < data.length) {
+        if (payload.isNotEmpty) {
           if (_receiveCancelled) break;
-          final chunk = Uint8List.sublistView(data, offset);
-          await raf!.writeFrom(chunk);
-          receivedBytes += chunk.length;
-          bytesInInterval += chunk.length;
+          await raf!.writeFrom(payload);
+          receivedBytes += payload.length;
+          bytesInInterval += payload.length;
 
           final now = DateTime.now();
           final elapsedMs = now.difference(lastSpeedUpdate).inMilliseconds;
@@ -967,7 +908,7 @@ builder: (_) => TransferScreen(
             bytesInInterval = 0;
             lastSpeedUpdate = now;
 
-            setState(() {
+            _ui(() {
               _transferredBytes = receivedBytes;
               _progress = totalSize > 0 ? (receivedBytes / totalSize).clamp(0.0, 1.0) : 0.0;
               _speedMBps = speed;
@@ -979,16 +920,25 @@ builder: (_) => TransferScreen(
 
       await raf?.flush();
       await raf?.close();
+      raf = null;
 
       if (_receiveCancelled) {
         await _deletePartialReceivedFile();
-        if (mounted) {
-          setState(() {
-            _status = 'Приём отменён';
-            _speedMBps = 0.0;
-          });
-        }
+        _ui(() {
+          _isReceivingNow = false;
+          _status = 'Приём отменён';
+          _speedMBps = 0.0;
+        });
         return;
+      }
+
+      if (!headerParsed) {
+        // Пустое подключение, ничего не принято.
+        return;
+      }
+
+      if (totalSize > 0 && receivedBytes < totalSize) {
+        throw Exception('Соединение прервано ($receivedBytes из $totalSize байт)');
       }
 
       final fullPath = '${saveDir.path}/$relPath';
@@ -1003,37 +953,52 @@ builder: (_) => TransferScreen(
         ),
       );
 
-      setState(() {
+      _activeReceivedFilePath = null;
+      _ui(() {
+        _isReceivingNow = false;
+        _transferCompleted = true;
         _progress = 1.0;
         _speedMBps = 0.0;
         _etaText = '00:00';
+        _transferredBytes = finalSize;
+        _lastSavedPath = fullPath;
+        _lastSavedFolder = File(fullPath).parent.path;
         _status = 'Сохранено: $fullPath';
       });
 
-      await _openIncomingTextIfNeeded(relPath, fullPath, finalSize);
+      await _openIncomingText(relPath, fullPath, finalSize, remoteIp);
     } catch (e) {
-      await raf?.close();
+      try {
+        await raf?.close();
+      } catch (_) {}
       if (_receiveCancelled) {
         await _deletePartialReceivedFile();
-        if (mounted) {
-          setState(() {
-            _status = 'Приём отменён';
-            _speedMBps = 0.0;
-          });
-        }
-      } else if (mounted) {
-        setState(() => _status = 'Ошибка приёма: $e');
+        _ui(() {
+          _isReceivingNow = false;
+          _status = 'Приём отменён';
+          _speedMBps = 0.0;
+        });
+      } else {
+        await _deletePartialReceivedFile();
+        _ui(() {
+          _isReceivingNow = false;
+          _speedMBps = 0.0;
+          _status = 'Ошибка приёма: $e';
+        });
       }
     } finally {
       _activeIncomingClient = null;
-      _activeRaf = null;
-      await client.close();
+      try {
+        await client.close();
+      } catch (_) {}
     }
   }
 
+  // ───────────── Меню отправки ─────────────
+
   Future<void> _openSendMenu() async {
     _hideKeyboard();
-    if (_isTransferring) return;
+    if (_busy) return;
 
     final host = _ipController.text.trim();
     if (host.isEmpty) {
@@ -1161,7 +1126,7 @@ builder: (_) => TransferScreen(
     final data = await Clipboard.getData('text/plain');
     final text = data?.text ?? '';
     if (text.trim().isEmpty) {
-      setState(() => _status = 'Буфер обмена пуст');
+      if (mounted) setState(() => _status = 'Буфер обмена пуст');
       return;
     }
     await _sendTextPayload(host, text, label: 'clipboard.txt');
@@ -1262,7 +1227,7 @@ builder: (_) => TransferScreen(
     }
 
     if (items.isEmpty) {
-      setState(() => _status = 'Выбранная папка пуста');
+      if (mounted) setState(() => _status = 'Выбранная папка пуста');
       return;
     }
 
@@ -1273,65 +1238,74 @@ builder: (_) => TransferScreen(
     );
   }
 
+  // ───────────── Отправка ─────────────
+
   Future<void> _sendItemsQueue(
     String host,
     List<OutgoingItem> items, {
     required String summaryDone,
   }) async {
-    if (_isTransferring) return;
+    if (_busy) return;
 
-    _sendCancelled = false;
     _cancelRequested = false;
-
-    setState(() {
+    _ui(() {
       _isTransferring = true;
+      _transferCompleted = false;
       _totalFilesCount = items.length;
+      _currentFileIndex = 0;
+      _currentFileName = '';
+      _progress = 0.0;
+      _speedMBps = 0.0;
+      _transferredBytes = 0;
+      _totalBytes = 0;
+      _etaText = '--:--';
+      _status = 'Подключение...';
     });
+    unawaited(_openTransferScreen(isSender: true));
 
     try {
       for (int i = 0; i < items.length; i++) {
-        if (_sendCancelled || _cancelRequested) {
-          throw Exception('Передача отменена');
-        }
-        setState(() => _currentFileIndex = i + 1);
+        if (_cancelRequested) break;
+        _ui(() => _currentFileIndex = i + 1);
         await _sendSingleItem(host, items[i]);
       }
 
-      setState(() {
-        _progress = 1.0;
-        _speedMBps = 0.0;
-        _etaText = '00:00';
-        _status = summaryDone;
-      });
+      if (_cancelRequested) {
+        _ui(() => _status = 'Передача отменена');
+      } else {
+        _ui(() {
+          _progress = 1.0;
+          _speedMBps = 0.0;
+          _etaText = '00:00';
+          _transferCompleted = true;
+          _status = summaryDone;
+        });
+      }
     } catch (e) {
-      setState(() {
+      _ui(() {
         _speedMBps = 0.0;
-        _status = (_sendCancelled || _cancelRequested) ? 'Передача отменена' : 'Ошибка отправки: $e';
+        _status = _cancelRequested ? 'Передача отменена' : 'Ошибка отправки: $e';
       });
     } finally {
       _activeSendSocket = null;
-      _activeSendRaf = null;
-      _sendCancelled = false;
-      _cancelRequested = false;
-      setState(() {
-        _isTransferring = false;
-        _totalFilesCount = 0;
-      });
+      _ui(() => _isTransferring = false);
     }
   }
 
   Future<void> _sendSingleItem(String host, OutgoingItem item) async {
-    setState(() {
+    _ui(() {
       _currentFileName = item.relativeName;
       _totalBytes = item.sizeBytes;
       _transferredBytes = 0;
       _progress = 0.0;
       _speedMBps = 0.0;
+      _etaText = '--:--';
       _status = 'Отправка ($_currentFileIndex/$_totalFilesCount)';
     });
 
     Socket? socket;
     RandomAccessFile? raf;
+    StreamSubscription<Uint8List>? sub;
 
     try {
       socket = await Socket.connect(
@@ -1339,41 +1313,43 @@ builder: (_) => TransferScreen(
         kTransferPort,
         timeout: const Duration(seconds: 6),
       );
-      socket.setOption(SocketOption.tcpNoDelay, true);
       _activeSendSocket = socket;
+      socket.setOption(SocketOption.tcpNoDelay, true);
+
+      final completer = Completer<int>();
+      final respBuilder = BytesBuilder(copy: true);
+      bool gotOffset = false;
+
+      // Подписка живёт до конца передачи, ответ получателя читаем один раз.
+      sub = socket.listen(
+        (Uint8List chunk) {
+          if (gotOffset) return;
+          respBuilder.add(chunk);
+          final bytes = respBuilder.toBytes();
+          final nl = bytes.indexOf(10);
+          if (nl != -1) {
+            gotOffset = true;
+            final offsetStr = utf8.decode(bytes.sublist(0, nl), allowMalformed: true).trim();
+            if (!completer.isCompleted) {
+              completer.complete(int.tryParse(offsetStr) ?? 0);
+            }
+          }
+        },
+        onError: (Object e) {
+          if (!completer.isCompleted) completer.completeError(e);
+        },
+        onDone: () {
+          if (!completer.isCompleted) {
+            completer.completeError(Exception('Получатель закрыл соединение'));
+          }
+        },
+        cancelOnError: true,
+      );
 
       socket.write('${item.relativeName}|${item.sizeBytes}\n');
       await socket.flush();
 
-      final completer = Completer<int>();
-      final respBuilder = BytesBuilder(copy: false);
-
-      late StreamSubscription sub;
-      sub = socket.listen(
-        (Uint8List chunk) {
-          respBuilder.add(chunk);
-          final bytes = respBuilder.toBytes();
-          final nl = bytes.indexOf(10);
-          if (nl != -1 && !completer.isCompleted) {
-            final offsetStr = utf8.decode(bytes.sublist(0, nl)).trim();
-            completer.complete(int.tryParse(offsetStr) ?? 0);
-            sub.pause();
-          }
-        },
-        onError: (e) {
-          if (!completer.isCompleted) completer.completeError(e);
-        },
-        onDone: () {
-          if (!completer.isCompleted) completer.complete(0);
-        },
-      );
-
-      final startOffset = await completer.future.timeout(const Duration(seconds: 5));
-      await sub.cancel();
-
-      if (_sendCancelled || _cancelRequested) {
-        throw Exception('Передача отменена');
-      }
+      final startOffset = await completer.future.timeout(const Duration(seconds: 10));
 
       int sentBytes = startOffset.clamp(0, item.sizeBytes);
       int bytesInInterval = 0;
@@ -1381,29 +1357,26 @@ builder: (_) => TransferScreen(
 
       if (item.rawBytes != null) {
         final raw = item.rawBytes!;
-        if (sentBytes < raw.length && !_sendCancelled && !_cancelRequested) {
-          final slice = Uint8List.sublistView(raw, sentBytes);
-          socket.add(slice);
+        if (sentBytes < raw.length) {
+          socket.add(Uint8List.sublistView(raw, sentBytes));
           await socket.flush();
           sentBytes = raw.length;
-          setState(() {
-            _transferredBytes = sentBytes;
-            _progress = 1.0;
-            _etaText = '00:00';
-          });
         }
+        _ui(() {
+          _transferredBytes = sentBytes;
+          _progress = 1.0;
+          _etaText = '00:00';
+        });
       } else if (item.file != null) {
         raf = await item.file!.open(mode: FileMode.read);
-        _activeSendRaf = raf;
         await raf.setPosition(sentBytes);
 
         while (sentBytes < item.sizeBytes) {
-          if (_sendCancelled || _cancelRequested) break;
+          if (_cancelRequested) throw Exception('Отменено');
           final remaining = item.sizeBytes - sentBytes;
           final toRead = remaining < kChunkSize ? remaining : kChunkSize;
           final buffer = await raf.read(toRead);
           if (buffer.isEmpty) break;
-          if (_sendCancelled || _cancelRequested) break;
 
           socket.add(buffer);
           await socket.flush();
@@ -1419,7 +1392,7 @@ builder: (_) => TransferScreen(
             bytesInInterval = 0;
             lastSpeedUpdate = now;
 
-            setState(() {
+            _ui(() {
               _transferredBytes = sentBytes;
               _progress = item.sizeBytes > 0 ? (sentBytes / item.sizeBytes).clamp(0.0, 1.0) : 0.0;
               _speedMBps = speed;
@@ -1428,13 +1401,10 @@ builder: (_) => TransferScreen(
           }
         }
         await raf.close();
-        _activeSendRaf = null;
+        raf = null;
       }
 
-      if (_sendCancelled || _cancelRequested) {
-        throw Exception('Передача отменена');
-      }
-
+      await socket.flush();
       await socket.close();
 
       widget.onAddHistory(
@@ -1447,12 +1417,19 @@ builder: (_) => TransferScreen(
         ),
       );
     } catch (e) {
-      await raf?.close();
-      _activeSendRaf = null;
+      try {
+        await raf?.close();
+      } catch (_) {}
       socket?.destroy();
       rethrow;
+    } finally {
+      try {
+        await sub?.cancel();
+      } catch (_) {}
     }
   }
+
+  // ───────────── Настройки ─────────────
 
   void _openSettings() {
     _hideKeyboard();
@@ -1476,8 +1453,11 @@ builder: (_) => TransferScreen(
     _ipController.dispose();
     _ipFocus.dispose();
     _server?.close();
+    _tick.dispose();
     super.dispose();
   }
+
+  // ───────────── UI ─────────────
 
   @override
   Widget build(BuildContext context) {
@@ -1556,9 +1536,7 @@ builder: (_) => TransferScreen(
                   ],
                 ),
               ),
-
               const SizedBox(height: 16),
-
               Center(
                 child: LiquidGlassButton(
                   label: _isListening ? 'Принимаю' : 'Принять',
@@ -1568,9 +1546,7 @@ builder: (_) => TransferScreen(
                   onPressed: _toggleReceive,
                 ),
               ),
-
               const SizedBox(height: 16),
-
               if (_peers.isNotEmpty) ...[
                 Container(
                   padding: const EdgeInsets.all(14),
@@ -1604,7 +1580,6 @@ builder: (_) => TransferScreen(
                 ),
                 const SizedBox(height: 14),
               ],
-
               TextField(
                 controller: _ipController,
                 focusNode: _ipFocus,
@@ -1675,11 +1650,21 @@ builder: (_) => TransferScreen(
                   ),
                 ],
               ),
-
               const SizedBox(height: 16),
-              if (_queuedItems.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.all(14),
+              Center(
+                child: LiquidGlassButton(
+                  label: 'Отправить',
+                  icon: Icons.upload_rounded,
+                  active: _isTransferring,
+                  isWhiteTheme: isWhite,
+                  onPressed: _busy ? null : _openSendMenu,
+                ),
+              ),
+              const SizedBox(height: 16),
+              GestureDetector(
+                onTap: _busy ? () => _openTransferScreen(isSender: _isTransferring) : null,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: cardBg,
                     borderRadius: kPillRadius,
@@ -1692,145 +1677,47 @@ builder: (_) => TransferScreen(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            'ВЫБРАНО (${_queuedItems.length})',
-                            style: TextStyle(fontSize: 11, color: subtle, fontWeight: FontWeight.w600),
+                            '${_speedMBps.toStringAsFixed(1)} МБ/с',
+                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: accent),
                           ),
-                          Row(
-                            children: [
-                              TextButton.icon(
-                                onPressed: _isTransferring ? null : _openSendMenu,
-                                icon: const Icon(Icons.add_rounded, size: 18),
-                                label: const Text('Добавить'),
-                              ),
-                              if (!_isTransferring)
-                                TextButton(
-                                  onPressed: _clearQueuedItems,
-                                  child: const Text('Очистить'),
-                                ),
-                            ],
+                          Text(
+                            _etaText,
+                            style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: subtle),
                           ),
                         ],
                       ),
-                      ...List.generate(_queuedItems.length, (index) {
-                        final item = _queuedItems[index];
-                        return ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(Icons.insert_drive_file_rounded, size: 18, color: fg),
-                          title: Text(
-                            item.relativeName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: kPillRadius,
+                        child: LinearProgressIndicator(
+                          value: _progress,
+                          minHeight: 8,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('${(_progress * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12)),
+                          Text(
+                            '${_formatSize(_transferredBytes)} / ${_formatSize(_totalBytes)}',
+                            style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: subtle),
                           ),
-                          subtitle: Text(
-                            _formatSize(item.sizeBytes),
-                            style: TextStyle(fontSize: 11, color: subtle, fontFamily: 'monospace'),
-                          ),
-                          trailing: _isTransferring
-                              ? null
-                              : IconButton(
-                                  icon: const Icon(Icons.close_rounded, size: 18),
-                                  tooltip: 'Удалить из списка',
-                                  onPressed: () => _removeQueuedItem(index),
-                                ),
-                        );
-                      }),
+                        ],
+                      ),
+                      if (_currentFileName.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          _currentFileName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: subtle),
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      Text(_status, style: const TextStyle(fontSize: 12)),
                     ],
                   ),
-                ),
-                const SizedBox(height: 14),
-              ],
-
-              Center(
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    LiquidGlassButton(
-                      label: _queuedItems.isEmpty ? 'Отправить' : 'Отправить (${_queuedItems.length})',
-                      icon: Icons.upload_rounded,
-                      active: _isTransferring,
-                      isWhiteTheme: isWhite,
-                      onPressed: _isTransferring ? null : _startSendingQueue,
-                    ),
-                    if (_isTransferring)
-                      LiquidGlassButton(
-                        label: 'Экран передачи',
-                        icon: Icons.open_in_full_rounded,
-                        active: false,
-                        isWhiteTheme: isWhite,
-                        onPressed: _openTransferScreen,
-                      ),
-                    if (_isTransferring)
-                      LiquidGlassButton(
-                        label: 'Отмена',
-                        icon: Icons.close_rounded,
-                        active: true,
-                        isWhiteTheme: isWhite,
-                        onPressed: _cancelTransfer,
-                      ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: kPillRadius,
-                  border: Border.all(color: cardBorder),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          '${_speedMBps.toStringAsFixed(1)} МБ/с',
-                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: accent),
-                        ),
-                        Text(
-                          _etaText,
-                          style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: subtle),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: kPillRadius,
-                      child: LinearProgressIndicator(
-                        value: _progress,
-                        minHeight: 8,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('${(_progress * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12)),
-                        Text(
-                          '${_formatSize(_transferredBytes)} / ${_formatSize(_totalBytes)}',
-                          style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: subtle),
-                        ),
-                      ],
-                    ),
-                    if (_currentFileName.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        _currentFileName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 12, color: subtle),
-                      ),
-                    ],
-                    const SizedBox(height: 6),
-                    Text(_status, style: const TextStyle(fontSize: 12)),
-                  ],
                 ),
               ),
             ],
@@ -1840,6 +1727,8 @@ builder: (_) => TransferScreen(
     );
   }
 }
+
+// ───────────────────────── Настройки ─────────────────────────
 
 class SettingsPage extends StatefulWidget {
   final AppSettings settings;
@@ -1882,7 +1771,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (selected != null && selected.isNotEmpty) {
         _dirController.text = selected;
         widget.onSaveDirChanged(selected);
-        setState(() {});
+        if (mounted) setState(() {});
       }
     } catch (_) {}
   }
@@ -1914,9 +1803,7 @@ class _SettingsPageState extends State<SettingsPage> {
               widget.onThemeChanged(val);
             },
           ),
-
           const Divider(height: 28),
-
           const Text('Папка сохранения', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           TextField(
@@ -1958,9 +1845,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ],
           ),
-
           const Divider(height: 28),
-
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -1969,7 +1854,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 TextButton(
                   onPressed: () async {
                     await widget.onClearHistory();
-                    setState(() {});
+                    if (mounted) setState(() {});
                   },
                   child: const Text('Очистить'),
                 ),
@@ -1983,7 +1868,8 @@ class _SettingsPageState extends State<SettingsPage> {
             )
           else
             ...history.map((item) {
-              final dt = '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}';
+              final dt =
+                  '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}';
               return ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
