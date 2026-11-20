@@ -13,6 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'screens/incoming_text_screen.dart';
 import 'screens/transfer_screen.dart';
 import 'widgets/liquid_glass.dart';
+import 'widgets/send_morph_bar.dart';
 
 const String kAppVersion = '1.2';
 // Порты ниже 49152, чтобы не конфликтовать с эфемерными портами iOS.
@@ -292,6 +293,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
   bool _cancelRequested = false;
   bool _receiveCancelled = false;
   bool _transferScreenOpen = false;
+  bool _menuOpen = false;
 
   Socket? _activeSendSocket;
   Socket? _activeIncomingClient;
@@ -884,106 +886,12 @@ class _TransferHomePageState extends State<TransferHomePage> {
   Future<void> _openSendMenu() async {
     _hideKeyboard();
     if (_busy) return;
+    setState(() => _menuOpen = true);
+  }
 
-    final isWhite = widget.settings.isWhiteTheme;
-    final p = GlassPalette(isWhite);
-
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.35),
-      isScrollControlled: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: GlassCard(
-              isWhite: isWhite,
-              radius: 36,
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 22),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: p.fg.withOpacity(0.25),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Что хотите отправить',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: p.fg,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: GlassChoiceTile(
-                          label: 'Вставить',
-                          icon: Icons.content_paste_rounded,
-                          isWhite: isWhite,
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            _enqueueClipboard();
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: GlassChoiceTile(
-                          label: 'Текст',
-                          icon: Icons.notes_rounded,
-                          isWhite: isWhite,
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            _enqueueTextComposer();
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: GlassChoiceTile(
-                          label: 'Файл',
-                          icon: Icons.insert_drive_file_rounded,
-                          isWhite: isWhite,
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            _enqueueFiles();
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: GlassChoiceTile(
-                          label: 'Папка',
-                          icon: Icons.folder_rounded,
-                          isWhite: isWhite,
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            _enqueueFolder();
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
+  void _menuAction(VoidCallback action) {
+    setState(() => _menuOpen = false);
+    action();
   }
 
   OutgoingItem _textItem(String text, String label) {
@@ -1155,6 +1063,7 @@ class _TransferHomePageState extends State<TransferHomePage> {
     final sent = <OutgoingItem>[];
 
     _ui(() {
+      _menuOpen = false;
       _isTransferring = true;
       _transferCompleted = false;
       _totalFilesCount = items.length;
@@ -1659,7 +1568,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
       isWhite: isWhite,
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onTap: _hideKeyboard,
+        onTap: () {
+          _hideKeyboard();
+          if (_menuOpen) setState(() => _menuOpen = false);
+        },
         child: Scaffold(
           backgroundColor: Colors.transparent,
           body: SafeArea(
@@ -1754,27 +1666,52 @@ class _TransferHomePageState extends State<TransferHomePage> {
                     _buildQueueCard(isWhite, p),
                     const SizedBox(height: 16),
                   ],
-                  Center(
-                    child: Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      alignment: WrapAlignment.center,
-                      children: [
-                        GlassButton(
-                          label: _queuedItems.isEmpty ? 'Отправить' : 'Отправить (${_queuedItems.length})',
-                          icon: Icons.upload_rounded,
-                          active: _isTransferring,
-                          isWhite: isWhite,
-                          onPressed: _busy ? null : _startSendingQueue,
-                        ),
-                        if (_busy)
+                  SendMorphBar(
+                    expanded: _menuOpen && !_busy,
+                    enabled: !_busy,
+                    active: _isTransferring,
+                    isWhite: isWhite,
+                    label: _queuedItems.isEmpty ? 'Отправить' : 'Отправить (${_queuedItems.length})',
+                    icon: Icons.upload_rounded,
+                    onPressed: _startSendingQueue,
+                    onClose: () => setState(() => _menuOpen = false),
+                    items: [
+                      MorphMenuItem(
+                        label: 'Вставить',
+                        icon: Icons.content_paste_rounded,
+                        onTap: () => _menuAction(_enqueueClipboard),
+                      ),
+                      MorphMenuItem(
+                        label: 'Текст',
+                        icon: Icons.notes_rounded,
+                        onTap: () => _menuAction(_enqueueTextComposer),
+                      ),
+                      MorphMenuItem(
+                        label: 'Файл',
+                        icon: Icons.insert_drive_file_rounded,
+                        onTap: () => _menuAction(_enqueueFiles),
+                      ),
+                      MorphMenuItem(
+                        label: 'Папка',
+                        icon: Icons.folder_rounded,
+                        onTap: () => _menuAction(_enqueueFolder),
+                      ),
+                    ],
+                  ),
+                  if (_busy) ...[
+                    const SizedBox(height: 12),
+                    Center(
+                      child: Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        alignment: WrapAlignment.center,
+                        children: [
                           GlassButton(
                             label: 'Экран передачи',
                             icon: Icons.open_in_full_rounded,
                             isWhite: isWhite,
                             onPressed: () => _openTransferScreen(isSender: _isTransferring),
                           ),
-                        if (_busy)
                           GlassButton(
                             label: 'Отмена',
                             icon: Icons.close_rounded,
@@ -1782,9 +1719,10 @@ class _TransferHomePageState extends State<TransferHomePage> {
                             isWhite: isWhite,
                             onPressed: _cancelTransfer,
                           ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                   const SizedBox(height: 18),
                   _buildStatusCard(isWhite, p),
                 ],
