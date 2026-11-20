@@ -25,6 +25,9 @@ class TransferScreen extends StatelessWidget {
   final VoidCallback onSendMore;
   final VoidCallback? onOpenFolder;
   final void Function(String filePath)? onOpenFile;
+  final double? maxSpeedMBps;
+  final double? avgSpeedMBps;
+  final double? minSpeedMBps;
 
   const TransferScreen({
     super.key,
@@ -49,6 +52,9 @@ class TransferScreen extends StatelessWidget {
     required this.onSendMore,
     this.onOpenFolder,
     this.onOpenFile,
+    this.maxSpeedMBps,
+    this.avgSpeedMBps,
+    this.minSpeedMBps,
   });
 
   String _formatSize(int bytes) {
@@ -63,16 +69,31 @@ class TransferScreen extends StatelessWidget {
     return '${size.toStringAsFixed(idx == 0 ? 0 : 2)} ${units[idx]}';
   }
 
-  IconData _iconForPath(String path) {
-    final lower = path.toLowerCase();
-    if (lower.endsWith('.apk')) return Icons.android_rounded;
-    if (lower.endsWith('.jpg') ||
-        lower.endsWith('.jpeg') ||
-        lower.endsWith('.png') ||
-        lower.endsWith('.webp')) {
-      return Icons.image_rounded;
-    }
-    return Icons.open_in_new_rounded;
+  Widget _statCell(String label, double? value, GlassPalette p) {
+    return GlassCard(
+      isWhite: isWhiteTheme,
+      radius: 18,
+      blur: 0,
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(color: p.subtle, fontSize: 11, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value == null ? '—' : value.toStringAsFixed(1),
+            style: TextStyle(color: p.fg, fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          Text(
+            'МБ/с',
+            style: TextStyle(color: p.subtle, fontSize: 10),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -238,9 +259,14 @@ class TransferScreen extends StatelessWidget {
                                         ),
                                       ),
                                     ),
-                                    if (canOpenReceivedFile) ...[
-                                      const SizedBox(width: 8),
-                                      Icon(_iconForPath(savedFilePath!), size: 20, color: p.subtle),
+                                    if (canOpenReceivedFile && onOpenFolder != null) ...[
+                                      const SizedBox(width: 10),
+                                      GlassIconButton(
+                                        icon: Icons.folder_rounded,
+                                        isWhite: isWhiteTheme,
+                                        size: 42,
+                                        onTap: onOpenFolder,
+                                      ),
                                     ],
                                   ],
                                 ),
@@ -253,6 +279,18 @@ class TransferScreen extends StatelessWidget {
                                   fontSize: 14,
                                 ),
                               ),
+                              if (isDone && avgSpeedMBps != null) ...[
+                                const SizedBox(height: 18),
+                                Row(
+                                  children: [
+                                    Expanded(child: _statCell('Средняя', avgSpeedMBps, p)),
+                                    const SizedBox(width: 10),
+                                    Expanded(child: _statCell('Макс', maxSpeedMBps, p)),
+                                    const SizedBox(width: 10),
+                                    Expanded(child: _statCell('Мин', minSpeedMBps, p)),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -283,26 +321,6 @@ class TransferScreen extends StatelessWidget {
                       ],
                     ),
                   ] else if (!isSender && !isTransferring) ...[
-                    if (canOpenReceivedFile) ...[
-                      GlassButton(
-                        label: 'Открыть файл',
-                        icon: Icons.open_in_new_rounded,
-                        isWhite: isWhiteTheme,
-                        expand: true,
-                        onPressed: () => onOpenFile!(savedFilePath!),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (!isSender && isDone && onOpenFolder != null) ...[
-                      GlassButton(
-                        label: 'Открыть папку',
-                        icon: Icons.folder_open_rounded,
-                        isWhite: isWhiteTheme,
-                        expand: true,
-                        onPressed: onOpenFolder,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
                     GlassButton(
                       label: 'Готово',
                       isWhite: isWhiteTheme,
