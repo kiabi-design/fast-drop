@@ -35,6 +35,17 @@ Future<Directory> resolveDefaultSaveDirectory() async {
   Directory dir;
   if (Platform.isAndroid) {
     dir = Directory('/storage/emulated/0/Download/FastDrop');
+  } else if (Platform.isLinux) {
+    // Linux: ~/Downloads/FastDrop (или ~/Загрузки/FastDrop — как настроено в системе).
+    String? base;
+    try {
+      base = (await getDownloadsDirectory())?.path;
+    } catch (_) {}
+    if (base == null) {
+      final home = Platform.environment['HOME'];
+      base = home != null ? '$home/Downloads' : (await getApplicationDocumentsDirectory()).path;
+    }
+    dir = Directory('$base/FastDrop');
   } else {
     final docs = await getApplicationDocumentsDirectory();
     dir = Directory('${docs.path}/FastDrop');
@@ -246,6 +257,20 @@ class _FastDropAppState extends State<FastDropApp> {
     return MaterialApp(
       title: 'FastDrop $kAppVersion',
       debugShowCheckedModeBanner: false,
+      builder: (context, child) {
+        final c = child ?? const SizedBox.shrink();
+        if (!Platform.isLinux) return c;
+        // На компьютере держим интерфейс в колонке удобной ширины.
+        return ColoredBox(
+          color: isWhite ? const Color(0xFFE3EEE6) : Colors.black,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: c,
+            ),
+          ),
+        );
+      },
       theme: ThemeData(
         brightness: isWhite ? Brightness.light : Brightness.dark,
         scaffoldBackgroundColor: Colors.transparent,
@@ -368,11 +393,32 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
 
   bool get _busy => _isTransferring || _isReceivingNow;
 
-  String get _myOs => Platform.isIOS ? 'iPhone' : (Platform.isAndroid ? 'Android' : 'Device');
+  String get _myOs => Platform.isIOS
+      ? 'iPhone'
+      : (Platform.isAndroid ? 'Android' : (Platform.isLinux ? 'Linux' : 'Device'));
+
+  IconData get _myIcon => _iconForOs(_myOs);
+
+  IconData _iconForOs(String os) {
+    switch (os) {
+      case 'iPhone':
+        return Icons.phone_iphone_rounded;
+      case 'Android':
+        return Icons.phone_android_rounded;
+      case 'Linux':
+        return Icons.laptop_rounded;
+      default:
+        return Icons.devices_rounded;
+    }
+  }
 
   String get _myName {
     final custom = widget.settings.deviceName?.trim();
     if (custom != null && custom.isNotEmpty) return custom;
+    if (Platform.isLinux) {
+      final host = Platform.localHostname.trim();
+      if (host.isNotEmpty) return host;
+    }
     return _myOs == 'Device' ? 'Устройство' : _myOs;
   }
 
@@ -446,7 +492,22 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
     return 'МБ/с: средняя ${f(_statAvg)} · макс ${f(_statMax > 0 ? _statMax : null)} · мин ${f(_statMin)}';
   }
 
+  Future<bool> _xdgOpen(String path) async {
+    try {
+      await Process.start('xdg-open', [path], mode: ProcessStartMode.detached);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _openReceivedFile(String path) async {
+    if (Platform.isLinux) {
+      if (!await _xdgOpen(path)) {
+        _toast('Не удалось открыть файл (нужна программа xdg-open)', seconds: 3);
+      }
+      return;
+    }
     try {
       final result = await OpenFilex.open(path);
       if (result.type != ResultType.done) {
@@ -460,6 +521,13 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
   Future<void> _openReceivedFolder() async {
     final folder = _lastSavedFolder;
     if (folder == null || folder.isEmpty) return;
+
+    if (Platform.isLinux) {
+      if (!await _xdgOpen(folder)) {
+        _toast('Файлы лежат в: $folder', seconds: 4);
+      }
+      return;
+    }
 
     try {
       if (Platform.isIOS) {
@@ -538,6 +606,14 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
       );
       final ips = <String>[];
       for (final iface in interfaces) {
+        final n = iface.name.toLowerCase();
+        if (n.startsWith('docker') ||
+            n.startsWith('br-') ||
+            n.startsWith('veth') ||
+            n.startsWith('virbr') ||
+            n.startsWith('vmnet')) {
+          continue;
+        }
         for (final addr in iface.addresses) {
           ips.add(addr.address);
         }
@@ -1566,7 +1642,7 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
                 child: Row(
                   children: [
                     Icon(
-                      peer.os == 'iPhone' ? Icons.phone_iphone_rounded : Icons.phone_android_rounded,
+                      _iconForOs(peer.os),
                       color: selected ? p.accent : p.fg,
                       size: 24,
                     ),
@@ -1807,7 +1883,7 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
                     ips: _myIps,
                     state: _receiveState,
                     isWhite: isWhite,
-                    isIos: Platform.isIOS,
+                    icon: _myIcon,
                     onTap: _toggleReceive,
                     onCopyIp: (ip) {
                       Clipboard.setData(ClipboardData(text: ip));
@@ -2130,7 +2206,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     GlassTextField(
                       controller: _nameController,
                       isWhite: isWhite,
-                      hint: Platform.isIOS ? 'iPhone' : 'Android',
+                      hint: Platform.isIOS ? 'iPhone' : (Platform.isAndroid ? 'Android' : Platform.localHostname),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -2151,7 +2227,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     GlassTextField(
                       controller: _dirController,
                       isWhite: isWhite,
-                      hint: Platform.isAndroid ? 'По умолчанию: Download/FastDrop' : 'По умолчанию: папка FastDrop',
+                      hint: Platform.isAndroid
+                          ? 'По умолчанию: Download/FastDrop'
+                          : (Platform.isLinux ? 'По умолчанию: Downloads/FastDrop' : 'По умолчанию: папка FastDrop'),
                       onSubmitted: (val) =>
                           widget.onSaveDirChanged(val.trim().isEmpty ? null : val.trim()),
                       suffix: IconButton(
