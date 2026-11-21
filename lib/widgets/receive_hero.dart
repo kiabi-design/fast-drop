@@ -12,7 +12,7 @@ class ReceiveHero extends StatefulWidget {
   final List<String> ips;
   final ReceiveState state;
   final bool isWhite;
-  final bool isIos;
+  final IconData icon;
   final VoidCallback onTap;
   final ValueChanged<String> onCopyIp;
 
@@ -22,7 +22,7 @@ class ReceiveHero extends StatefulWidget {
     required this.ips,
     required this.state,
     required this.isWhite,
-    required this.isIos,
+    required this.icon,
     required this.onTap,
     required this.onCopyIp,
   });
@@ -155,7 +155,7 @@ class _ReceiveHeroState extends State<ReceiveHero> with SingleTickerProviderStat
                         width: 92,
                         height: 92,
                         child: Icon(
-                          widget.isIos ? Icons.phone_iphone_rounded : Icons.phone_android_rounded,
+                          widget.icon,
                           size: 44,
                           color: color,
                         ),
