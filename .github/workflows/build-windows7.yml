@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'windows7/**'
+      - 'windows7/fastdrop_win7.py'
       - '.github/workflows/build-windows7.yml'
 
 jobs:
