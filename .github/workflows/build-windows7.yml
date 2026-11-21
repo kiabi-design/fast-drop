@@ -1,0 +1,36 @@
+name: Build Windows 7 (32-bit)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'windows7/**'
+      - '.github/workflows/build-windows7.yml'
+
+jobs:
+  build-win7:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.8 (32-bit)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+          architecture: 'x86'
+
+      - name: Install PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller==5.13.2
+
+      - name: Build FastDrop.exe
+        run: pyinstaller --noconfirm --onefile --windowed --name FastDrop windows7/fastdrop_win7.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastDrop-win7-x86
+          path: dist/FastDrop.exe
