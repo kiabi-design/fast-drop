@@ -1,0 +1,54 @@
+name: Build Linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/build-linux.yml'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.0
+          cache: true
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Create Linux platform files
+        run: flutter create --platforms=linux --project-name fast_drop --org com.fastdrop .
+
+      - name: Window size and title
+        run: |
+          sed -i 's/gtk_window_set_default_size(window, 1280, 720)/gtk_window_set_default_size(window, 520, 900)/' linux/my_application.cc
+          sed -i 's/"fast_drop"/"FastDrop"/g' linux/my_application.cc
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build Linux release
+        run: flutter build linux --release
+
+      - name: Pack bundle
+        run: |
+          cd build/linux/x64/release
+          tar -czf "$GITHUB_WORKSPACE/FastDrop-linux-x64.tar.gz" bundle
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastDrop-linux-x64
+          path: FastDrop-linux-x64.tar.gz
