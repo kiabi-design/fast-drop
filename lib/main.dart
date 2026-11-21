@@ -13,9 +13,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'platform/drop_area.dart';
 import 'screens/incoming_text_screen.dart';
 import 'screens/transfer_screen.dart';
 import 'widgets/liquid_glass.dart';
+import 'widgets/path_browser.dart';
 import 'widgets/receive_hero.dart';
 import 'widgets/send_morph_bar.dart';
 
@@ -28,6 +30,12 @@ const int kChunkSize = 1024 * 1024;
 /// false: выбранные файлы попадают в список «ВЫБРАНО», отправка по кнопке «Отправить (N)».
 /// true: после выбора файлов отправка начинается сразу.
 const bool kSendImmediately = false;
+
+/// true — старый вид: переключатель фона на главном экране, история внутри настроек.
+/// false — новый вид: на главном экране кнопка истории (часы), история в отдельном окне.
+/// Сейчас старый вид оставлен только на Android. Чтобы новый вид был и на Android,
+/// замени Platform.isAndroid на false.
+final bool kLegacyLayout = Platform.isAndroid;
 
 /// Собственная папка приложения для принятых файлов.
 /// Android: Download/FastDrop, iPhone: «Файлы» → FastDrop → FastDrop.
@@ -58,6 +66,25 @@ Future<Directory> resolveDefaultSaveDirectory() async {
   } catch (_) {
     return await getApplicationDocumentsDirectory();
   }
+}
+
+/// Выбор папки. На Linux системные окна часто не открываются
+/// (нужны zenity/kdialog), поэтому используем встроенный выбор.
+Future<String?> pickDirectoryCompat(
+  BuildContext context, {
+  required bool isWhite,
+  String? initialDir,
+}) async {
+  if (Platform.isLinux) {
+    final r = await showPathBrowser(
+      context,
+      mode: PathPickMode.folder,
+      isWhite: isWhite,
+      initialDir: initialDir,
+    );
+    return (r == null || r.isEmpty) ? null : r.first;
+  }
+  return FilePicker.platform.getDirectoryPath();
 }
 
 void main() {
@@ -243,6 +270,11 @@ class _FastDropAppState extends State<FastDropApp> {
     await SettingsStorage.save(_settings);
   }
 
+  Future<void> _clearHistoryKind(String direction) async {
+    setState(() => _settings.history.removeWhere((h) => h.direction == direction));
+    await SettingsStorage.save(_settings);
+  }
+
   Future<void> _clearHistory() async {
     setState(() => _settings.history.clear());
     await SettingsStorage.save(_settings);
@@ -308,6 +340,7 @@ class _FastDropAppState extends State<FastDropApp> {
               onDeviceNameChanged: _updateDeviceName,
               onAddHistory: _addHistory,
               onClearHistory: _clearHistory,
+              onClearHistoryKind: _clearHistoryKind,
             ),
     );
   }
@@ -322,6 +355,7 @@ class TransferHomePage extends StatefulWidget {
   final ValueChanged<String?> onDeviceNameChanged;
   final ValueChanged<TransferHistoryItem> onAddHistory;
   final Future<void> Function() onClearHistory;
+  final Future<void> Function(String direction) onClearHistoryKind;
 
   const TransferHomePage({
     super.key,
@@ -331,13 +365,15 @@ class TransferHomePage extends StatefulWidget {
     required this.onDeviceNameChanged,
     required this.onAddHistory,
     required this.onClearHistory,
+    required this.onClearHistoryKind,
   });
 
   @override
   State<TransferHomePage> createState() => _TransferHomePageState();
 }
 
-class _TransferHomePageState extends State<TransferHomePage> with WidgetsBindingObserver {
+class _TransferHomePageState extends State<TransferHomePage>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final TextEditingController _ipController = TextEditingController(text: '172.20.10.1');
   final FocusNode _ipFocus = FocusNode();
 
@@ -358,6 +394,9 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
   bool _receiveCancelled = false;
   bool _transferScreenOpen = false;
   bool _menuOpen = false;
+  bool _dropHover = false;
+  late final AnimationController _drawerC;
+  double _drawerWidth = 400;
   bool _receiveEnabled = true;
   String? _listenError;
   bool _showStatusCard = false;
@@ -407,6 +446,8 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
         return Icons.phone_android_rounded;
       case 'Linux':
         return Icons.laptop_rounded;
+      case 'Windows':
+        return Icons.desktop_windows_rounded;
       default:
         return Icons.devices_rounded;
     }
@@ -434,6 +475,7 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _drawerC = AnimationController(vsync: this, duration: const Duration(milliseconds: 320));
     _initEnvironment();
   }
 
@@ -1263,6 +1305,18 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
   }
 
   Future<void> _enqueueFiles() async {
+    if (Platform.isLinux) {
+      final paths = await showPathBrowser(
+        context,
+        mode: PathPickMode.files,
+        isWhite: widget.settings.isWhiteTheme,
+      );
+      if (paths == null || paths.isEmpty) return;
+      final picked = await _itemsFromPaths(paths);
+      if (!mounted) return;
+      _addToQueue(picked);
+      return;
+    }
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       withReadStream: false,
@@ -1282,7 +1336,7 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
   }
 
   Future<void> _enqueueFolder() async {
-    final dirPath = await FilePicker.platform.getDirectoryPath();
+    final dirPath = await pickDirectoryCompat(context, isWhite: widget.settings.isWhiteTheme);
     if (dirPath == null || dirPath.trim().isEmpty) return;
 
     final rootDir = Directory(dirPath);
@@ -1538,9 +1592,43 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
 
   // ───────────── Настройки ─────────────
 
+  void _openDrawer() {
+    _hideKeyboard();
+    _drawerC.animateTo(1.0, duration: const Duration(milliseconds: 320), curve: Curves.easeOutCubic);
+  }
+
+  void _closeDrawer() {
+    _hideKeyboard();
+    _drawerC.animateTo(0.0, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+  }
+
+  void _onDrawerDragEnd(DragEndDetails d) {
+    final vel = (d.primaryVelocity ?? 0) / _drawerWidth; // доли ширины в секунду
+    final open = vel.abs() > 0.7 ? vel > 0 : _drawerC.value > 0.5;
+    final mag = vel.abs() < 1.6 ? 1.6 : (vel.abs() > 4.0 ? 4.0 : vel.abs());
+    _drawerC.fling(velocity: open ? mag : -mag);
+  }
+
+  void _openHistory() {
+    _hideKeyboard();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => HistoryPage(
+          settings: widget.settings,
+          onClearHistoryKind: widget.onClearHistoryKind,
+          onOpenFile: _openReceivedFile,
+        ),
+      ),
+    );
+  }
+
   void _openSettings() {
     _hideKeyboard();
     if (_menuOpen) setState(() => _menuOpen = false);
+    if (Platform.isIOS) {
+      _openDrawer();
+      return;
+    }
     Navigator.of(context).push(
       PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 260),
@@ -1568,6 +1656,7 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _drawerC.dispose();
     _beaconTimer?.cancel();
     _cleanupTimer?.cancel();
     _hideCardTimer?.cancel();
@@ -1610,9 +1699,11 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
           ),
         ),
         GlassIconButton(
-          icon: isWhite ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+          icon: kLegacyLayout
+              ? (isWhite ? Icons.dark_mode_rounded : Icons.light_mode_rounded)
+              : Icons.history_rounded,
           isWhite: isWhite,
-          onTap: () => widget.onThemeChanged(!isWhite),
+          onTap: kLegacyLayout ? () => widget.onThemeChanged(!isWhite) : _openHistory,
         ),
         const SizedBox(width: 10),
         GlassIconButton(
@@ -1850,8 +1941,185 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
     );
   }
 
+  // ───────────── Перетаскивание файлов ─────────────
+
+  String _baseName(String path) {
+    final parts = path.replaceAll('\\', '/').split('/').where((x) => x.isNotEmpty).toList();
+    return parts.isEmpty ? path : parts.last;
+  }
+
+  Future<List<OutgoingItem>> _itemsFromPaths(List<String> paths) async {
+    final items = <OutgoingItem>[];
+    for (final raw in paths) {
+      var path = raw;
+      if (path.startsWith('file://')) {
+        try {
+          path = Uri.parse(path).toFilePath();
+        } catch (_) {}
+      }
+      try {
+        final type = await FileSystemEntity.type(path);
+        if (type == FileSystemEntityType.file) {
+          items.add(
+            OutgoingItem(
+              relativeName: _baseName(path),
+              sizeBytes: await File(path).length(),
+              file: File(path),
+            ),
+          );
+        } else if (type == FileSystemEntityType.directory) {
+          final root = Directory(path);
+          final folderName = _baseName(path);
+          final normalizedRoot = root.path.replaceAll('\\', '/');
+          final prefix = normalizedRoot.endsWith('/') ? normalizedRoot : '$normalizedRoot/';
+          await for (final e in root.list(recursive: true, followLinks: false)) {
+            if (e is File) {
+              final p2 = e.path.replaceAll('\\', '/');
+              final rel = p2.startsWith(prefix) ? p2.substring(prefix.length) : _baseName(e.path);
+              items.add(
+                OutgoingItem(
+                  relativeName: '$folderName/$rel',
+                  sizeBytes: await e.length(),
+                  file: e,
+                ),
+              );
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return items;
+  }
+
+  Future<void> _onDroppedPaths(List<String> paths) async {
+    if (!mounted) return;
+    if (_busy) {
+      _toast('Идёт передача, подождите', seconds: 2);
+      return;
+    }
+    if (_menuOpen) setState(() => _menuOpen = false);
+    final items = await _itemsFromPaths(paths);
+    if (!mounted) return;
+    if (items.isEmpty) {
+      _toast('Не удалось добавить файлы', seconds: 2);
+      return;
+    }
+    _addToQueue(items);
+    _toast('Добавлено: ${items.length}', seconds: 2);
+  }
+
+  Widget _buildDropOverlay() {
+    final isWhite = widget.settings.isWhiteTheme;
+    final p = GlassPalette(isWhite);
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: ColoredBox(
+          color: Colors.black.withOpacity(0.4),
+          child: Center(
+            child: GlassCard(
+              isWhite: isWhite,
+              radius: 32,
+              tint: p.accent,
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.file_download_rounded, size: 44, color: p.accent),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Отпустите, чтобы добавить',
+                    style: TextStyle(color: p.fg, fontSize: 17, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ───────────── Панель настроек, которая едет за пальцем (iPhone) ─────────────
+
+  Widget _buildDrawerStack(Widget home) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        _drawerWidth = w <= 0 ? 400 : w;
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragStart: (_) {
+            _drawerC.stop();
+            _hideKeyboard();
+          },
+          onHorizontalDragUpdate: (d) {
+            final next = _drawerC.value + d.delta.dx / _drawerWidth;
+            _drawerC.value = next.clamp(0.0, 1.0).toDouble();
+          },
+          onHorizontalDragEnd: _onDrawerDragEnd,
+          child: AnimatedBuilder(
+            animation: _drawerC,
+            builder: (context, _) {
+              final t = _drawerC.value;
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: Transform.translate(
+                      offset: Offset(_drawerWidth * 0.22 * t, 0),
+                      child: home,
+                    ),
+                  ),
+                  if (t > 0)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: ColoredBox(color: Colors.black.withOpacity(0.45 * t)),
+                      ),
+                    ),
+                  if (t > 0)
+                    Positioned.fill(
+                      child: Transform.translate(
+                        offset: Offset(-_drawerWidth * (1 - t), 0),
+                        child: SettingsPage(
+                          settings: widget.settings,
+                          onThemeChanged: widget.onThemeChanged,
+                          onSaveDirChanged: widget.onSaveDirChanged,
+                          onDeviceNameChanged: widget.onDeviceNameChanged,
+                          onClearHistory: widget.onClearHistory,
+                          onClose: _closeDrawer,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final home = _buildHome(context);
+    // Android оставляем без изменений.
+    if (Platform.isAndroid) return home;
+
+    final body = Platform.isIOS ? _buildDrawerStack(home) : home;
+    return FileDropArea(
+      onFiles: _onDroppedPaths,
+      onHover: (v) {
+        if (mounted && _dropHover != v) setState(() => _dropHover = v);
+      },
+      child: Stack(
+        children: [
+          Positioned.fill(child: body),
+          if (_dropHover) _buildDropOverlay(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHome(BuildContext context) {
     final isWhite = widget.settings.isWhiteTheme;
     final p = GlassPalette(isWhite);
 
@@ -1863,10 +2131,12 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
           _hideKeyboard();
           if (_menuOpen) setState(() => _menuOpen = false);
         },
-        onHorizontalDragEnd: (details) {
-          final v = details.primaryVelocity ?? 0;
-          if (v > 350) _openSettings();
-        },
+        onHorizontalDragEnd: Platform.isIOS
+            ? null
+            : (details) {
+                final v = details.primaryVelocity ?? 0;
+                if (v > 350) _openSettings();
+              },
         child: Scaffold(
           backgroundColor: Colors.transparent,
           body: SafeArea(
@@ -2033,6 +2303,194 @@ class _TransferHomePageState extends State<TransferHomePage> with WidgetsBinding
   }
 }
 
+// ───────────────────────── История ─────────────────────────
+
+class HistoryPage extends StatefulWidget {
+  final AppSettings settings;
+  final Future<void> Function(String direction) onClearHistoryKind;
+  final void Function(String path) onOpenFile;
+
+  const HistoryPage({
+    super.key,
+    required this.settings,
+    required this.onClearHistoryKind,
+    required this.onOpenFile,
+  });
+
+  @override
+  State<HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<HistoryPage> {
+  static const String _sent = 'Отправлено';
+  static const String _received = 'Принято';
+
+  String _tab = _sent;
+
+  String _formatBytes(int b) {
+    if (b <= 0) return '0 Б';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} КБ';
+    if (b < 1024 * 1024 * 1024) return '${(b / (1024 * 1024)).toStringAsFixed(2)} МБ';
+    return '${(b / (1024 * 1024 * 1024)).toStringAsFixed(2)} ГБ';
+  }
+
+  String _two(int v) => v.toString().padLeft(2, '0');
+
+  String _formatDate(DateTime t) => '${_two(t.day)}.${_two(t.month)} ${_two(t.hour)}:${_two(t.minute)}';
+
+  @override
+  Widget build(BuildContext context) {
+    final isWhite = widget.settings.isWhiteTheme;
+    final p = GlassPalette(isWhite);
+    final all = widget.settings.history;
+    final sentCount = all.where((h) => h.direction == _sent).length;
+    final recvCount = all.where((h) => h.direction == _received).length;
+    final isSentTab = _tab == _sent;
+    final list = all.where((h) => h.direction == _tab).toList();
+
+    return LiquidBackground(
+      isWhite: isWhite,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Row(
+                  children: [
+                    GlassIconButton(
+                      icon: Icons.arrow_back_ios_new_rounded,
+                      isWhite: isWhite,
+                      onTap: () => Navigator.of(context).pop(),
+                    ),
+                    Expanded(
+                      child: Text(
+                        'История',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: p.fg,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (list.isEmpty)
+                      const SizedBox(width: 44)
+                    else
+                      GlassIconButton(
+                        icon: Icons.delete_outline_rounded,
+                        isWhite: isWhite,
+                        onTap: () async {
+                          await widget.onClearHistoryKind(_tab);
+                          if (mounted) setState(() {});
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: GlassButton(
+                        label: 'Отправлено ($sentCount)',
+                        isWhite: isWhite,
+                        active: isSentTab,
+                        expand: true,
+                        onPressed: () => setState(() => _tab = _sent),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: GlassButton(
+                        label: 'Принято ($recvCount)',
+                        isWhite: isWhite,
+                        active: !isSentTab,
+                        expand: true,
+                        onPressed: () => setState(() => _tab = _received),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: list.isEmpty
+                    ? Center(
+                        child: Text(
+                          isSentTab ? 'Ничего не отправлено' : 'Ничего не принято',
+                          style: TextStyle(color: p.subtle, fontSize: 15),
+                        ),
+                      )
+                    : ListView.builder(
+                        key: ValueKey<String>(_tab),
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                        itemCount: list.length,
+                        itemBuilder: (context, i) {
+                          final item = list[i];
+                          final canOpen = !isSentTab && item.savedPath.isNotEmpty;
+                          final meta = isSentTab
+                              ? '${_formatBytes(item.sizeBytes)} · ${_formatDate(item.timestamp)} · на ${item.savedPath}'
+                              : '${_formatBytes(item.sizeBytes)} · ${_formatDate(item.timestamp)}';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: GlassCard(
+                              isWhite: isWhite,
+                              radius: 22,
+                              blur: 0,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              onTap: canOpen ? () => widget.onOpenFile(item.savedPath) : null,
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    isSentTab ? Icons.north_east_rounded : Icons.download_done_rounded,
+                                    size: 22,
+                                    color: isSentTab ? p.success : p.accent,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.fileName,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: p.fg,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          meta,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(color: p.subtle, fontSize: 12),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (canOpen)
+                                    Icon(Icons.open_in_new_rounded, size: 18, color: p.subtle),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Свайп влево закрывает экран настроек.
 class _SwipeToClose extends StatelessWidget {
   final Widget child;
@@ -2059,6 +2517,7 @@ class SettingsPage extends StatefulWidget {
   final ValueChanged<String?> onSaveDirChanged;
   final ValueChanged<String?> onDeviceNameChanged;
   final Future<void> Function() onClearHistory;
+  final VoidCallback? onClose;
 
   const SettingsPage({
     super.key,
@@ -2067,6 +2526,7 @@ class SettingsPage extends StatefulWidget {
     required this.onSaveDirChanged,
     required this.onDeviceNameChanged,
     required this.onClearHistory,
+    this.onClose,
   });
 
   @override
@@ -2106,7 +2566,11 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _pickFolder() async {
     try {
-      final selected = await FilePicker.platform.getDirectoryPath();
+      final selected = await pickDirectoryCompat(
+        context,
+        isWhite: _whiteTheme,
+        initialDir: widget.settings.customSaveDir,
+      );
       if (selected != null && selected.isNotEmpty) {
         _dirController.text = selected;
         widget.onSaveDirChanged(selected);
@@ -2142,7 +2606,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   GlassIconButton(
                     icon: Icons.arrow_back_ios_new_rounded,
                     isWhite: isWhite,
-                    onTap: () => Navigator.of(context).pop(),
+                    onTap: widget.onClose ?? () => Navigator.of(context).pop(),
                   ),
                   Expanded(
                     child: Text(
@@ -2271,6 +2735,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ],
                 ),
               ),
+              if (kLegacyLayout) ...[
               const SizedBox(height: 16),
               GlassCard(
                 isWhite: isWhite,
@@ -2344,6 +2809,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ],
                 ),
               ),
+              ],
             ],
           ),
         ),
