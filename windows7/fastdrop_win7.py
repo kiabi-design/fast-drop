@@ -12,7 +12,6 @@ import queue
 import re
 import socket
 import subprocess
-import sys
 import threading
 import time
 import traceback
@@ -23,6 +22,11 @@ try:
 except Exception:  # запуск без экрана (проверка сети)
     tk = None
 
+try:
+    import windnd
+except Exception:
+    windnd = None
+
 APP_VERSION = '1.2'
 TRANSFER_PORT = 14680
 DISCOVERY_PORT = 14681
@@ -30,11 +34,12 @@ CHUNK = 1024 * 1024
 BEACON_PREFIX = 'FASTDROP_READY|'
 
 BG = '#000000'
-CARD = '#0a110b'
-EDGE = '#2b4f33'
+PANEL = '#050806'
+CARD = '#080e0a'
+EDGE = '#18241b'
 ACCENT = '#4df56b'
 TEXT = '#ffffff'
-SUBTLE = '#9aa89e'
+SUBTLE = '#8f9c92'
 DANGER = '#ff6b7a'
 
 
@@ -119,6 +124,41 @@ def local_ips():
     except Exception:
         pass
     return ips
+
+
+def collect_folder_items(root_dir):
+    root_dir = os.path.normpath(root_dir)
+    folder = os.path.basename(root_dir) or 'folder'
+    items = []
+    for cur, dirs, files in os.walk(root_dir):
+        for fn in files:
+            full = os.path.join(cur, fn)
+            rel = os.path.relpath(full, root_dir).replace('\\', '/')
+            try:
+                items.append({'rel': folder + '/' + rel, 'size': os.path.getsize(full), 'path': full})
+            except OSError:
+                pass
+    return items
+
+
+def collect_dropped_items(raw_paths):
+    items = []
+    for raw in raw_paths:
+        if isinstance(raw, bytes):
+            p = raw.decode('utf-8', 'replace')
+        else:
+            p = str(raw)
+        p = p.strip().strip('"')
+        if not p or not os.path.exists(p):
+            continue
+        if os.path.isdir(p):
+            items.extend(collect_folder_items(p))
+        elif os.path.isfile(p):
+            try:
+                items.append({'rel': os.path.basename(p), 'size': os.path.getsize(p), 'path': p})
+            except OSError:
+                pass
+    return items
 
 
 class Cancelled(Exception):
@@ -347,7 +387,7 @@ class Net(object):
             while b'\n' not in buf:
                 chunk = conn.recv(65536)
                 if not chunk:
-                    return  # пустое подключение
+                    return
                 buf += chunk
                 if len(buf) > 16384:
                     raise ValueError('Некорректный заголовок')
@@ -532,7 +572,6 @@ class Net(object):
                 if sent < size:
                     raise Exception('Файл изменился во время отправки')
 
-            # Ждём, пока получатель дочитает и закроет соединение.
             try:
                 s.shutdown(socket.SHUT_WR)
             except Exception:
@@ -565,7 +604,7 @@ def mix(c1, c2, t):
 if tk is not None:
 
     class PillButton(tk.Canvas):
-        def __init__(self, master, text, command, width=120, height=38, kind='normal', bg=BG):
+        def __init__(self, master, text, command, width=106, height=30, kind='normal', bg=CARD):
             tk.Canvas.__init__(self, master, width=width, height=height, bg=bg,
                                highlightthickness=0, bd=0)
             self.w = width
@@ -588,19 +627,19 @@ if tk is not None:
         def _draw(self):
             self.delete('all')
             if self.kind == 'accent':
-                fill, outline, fg = '#14401c', ACCENT, ACCENT
+                fill, outline, fg = '#0b180e', ACCENT, ACCENT
             elif self.kind == 'danger':
-                fill, outline, fg = '#3a1218', DANGER, DANGER
+                fill, outline, fg = '#1e0b0e', DANGER, DANGER
             else:
-                fill, outline, fg = '#0f1a11', EDGE, TEXT
+                fill, outline, fg = '#090d0a', EDGE, TEXT
             if self.hover and self.enabled:
-                fill = mix(fill, '#ffffff', 0.10)
+                fill = mix(fill, '#ffffff', 0.08)
             if not self.enabled:
                 fg = SUBTLE
             self._round(2, 2, self.w - 2, self.h - 2, self.h // 2, fill=fill,
-                        outline=outline, width=1.5)
+                        outline=outline, width=1.2)
             self.create_text(self.w // 2, self.h // 2, text=self.text, fill=fg,
-                             font=('Segoe UI', 10, 'bold'))
+                             font=('Segoe UI', 9, 'bold'))
 
         def _set_hover(self, v):
             self.hover = v
@@ -623,14 +662,14 @@ if tk is not None:
     class Radar(tk.Canvas):
         COLORS = {
             'waiting': ACCENT,
-            'receiving': '#b8ff7a',
+            'receiving': ACCENT,
             'sending': ACCENT,
             'off': SUBTLE,
             'error': DANGER,
         }
 
-        def __init__(self, master, w=300, h=190):
-            tk.Canvas.__init__(self, master, width=w, height=h, bg=CARD,
+        def __init__(self, master, w=230, h=145):
+            tk.Canvas.__init__(self, master, width=w, height=h, bg=PANEL,
                                highlightthickness=0, bd=0)
             self.w = w
             self.h = h
@@ -645,20 +684,20 @@ if tk is not None:
                 t = (time.time() / 3.0) % 1.0
                 for i in range(3):
                     ph = (t * speed + i / 3.0) % 1.0
-                    r = 42 + (self.h / 2.0 - 44) * ph
+                    r = 30 + (min(self.w, self.h) / 2.0 - 34) * ph
                     fade = 1.0 - ph
                     self.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                     outline=mix(CARD, color, 0.75 * fade), width=2)
+                                     outline=mix(PANEL, color, 0.55 * fade), width=1.5)
             else:
-                r = 58
+                r = 44
                 self.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                 outline=mix(CARD, color, 0.3), width=2)
-            self.create_oval(cx - 36, cy - 36, cx + 36, cy + 36,
-                             fill=mix(CARD, color, 0.18), outline=color, width=2)
+                                 outline=mix(PANEL, color, 0.25), width=1.5)
+            self.create_oval(cx - 28, cy - 28, cx + 28, cy + 28,
+                             fill='#070c08', outline=mix(PANEL, color, 0.7), width=1.5)
             # значок компьютера
-            self.create_rectangle(cx - 17, cy - 14, cx + 17, cy + 8, outline=color, width=2)
-            self.create_line(cx, cy + 8, cx, cy + 14, fill=color, width=2)
-            self.create_line(cx - 9, cy + 15, cx + 9, cy + 15, fill=color, width=2)
+            self.create_rectangle(cx - 13, cy - 11, cx + 13, cy + 6, outline=color, width=1.8)
+            self.create_line(cx, cy + 6, cx, cy + 11, fill=color, width=1.8)
+            self.create_line(cx - 7, cy + 12, cx + 7, cy + 12, fill=color, width=1.8)
 
     class App(object):
         def __init__(self):
@@ -673,10 +712,10 @@ if tk is not None:
             self.progress = 0.0
 
             self.root = tk.Tk()
-            self.root.title('FastDrop')
+            self.root.title('FastDrop v' + APP_VERSION)
             self.root.configure(bg=BG)
-            self.root.geometry('480x860')
-            self.root.minsize(440, 700)
+            self.root.geometry('660x430')
+            self.root.minsize(580, 390)
             self.root.protocol('WM_DELETE_WINDOW', self.on_close)
             self._build()
 
@@ -705,111 +744,177 @@ if tk is not None:
 
         # --- построение окна ---
 
-        def _label(self, parent, text='', fg=TEXT, size=10, bold=False, bg=CARD, mono=False):
+        def _label(self, parent, text='', fg=TEXT, size=9, bold=False, bg=CARD, mono=False):
             font = ('Consolas' if mono else 'Segoe UI', size, 'bold' if bold else 'normal')
             return tk.Label(parent, text=text, bg=bg, fg=fg, font=font)
 
         def _build(self):
             outer = tk.Frame(self.root, bg=BG)
-            outer.pack(fill='both', expand=True, padx=16, pady=10)
+            outer.pack(fill='both', expand=True, padx=10, pady=8)
 
-            self._label(outer, 'FastDrop', TEXT, 16, True, BG).pack()
-            self._label(outer, 'v' + APP_VERSION, SUBTLE, 8, False, BG).pack()
+            # Верхняя строка состояния
+            top_bar = tk.Frame(outer, bg=PANEL, highlightbackground=EDGE, highlightthickness=1)
+            top_bar.pack(fill='x', pady=(0, 8))
+            top_inner = tk.Frame(top_bar, bg=PANEL)
+            top_inner.pack(padx=10, pady=5)
+            self.top_dot = tk.Canvas(top_inner, width=10, height=10, bg=PANEL,
+                                     highlightthickness=0, bd=0)
+            self.top_dot.pack(side='left', padx=(0, 6))
+            self.top_dot.create_oval(1, 1, 9, 9, fill=ACCENT, outline='')
+            self.top_status_lbl = self._label(
+                top_inner, '%s · Ожидание отправителя' % self.get_name(),
+                TEXT, 9, True, PANEL, False)
+            self.top_status_lbl.pack(side='left')
+            self.top_ip_lbl = self._label(top_inner, '', SUBTLE, 9, False, PANEL, True)
+            self.top_ip_lbl.pack(side='left', padx=(8, 0))
 
-            hero = tk.Frame(outer, bg=CARD, highlightbackground=EDGE, highlightthickness=1)
-            hero.pack(fill='x', pady=(8, 8))
-            self.radar = Radar(hero)
-            self.radar.pack(pady=(6, 0))
+            # Две колонки
+            cols = tk.Frame(outer, bg=BG)
+            cols.pack(fill='both', expand=True)
+            cols.columnconfigure(0, weight=0)
+            cols.columnconfigure(1, weight=1)
+            cols.rowconfigure(0, weight=1)
+
+            # Левая колонка: радар + устройство + кнопки управления
+            left = tk.Frame(cols, bg=PANEL, highlightbackground=EDGE, highlightthickness=1)
+            left.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
+
+            self.radar = Radar(left, w=230, h=140)
+            self.radar.pack(pady=(8, 0))
             self.radar.bind('<Button-1>', lambda e: self._toggle_receive())
-            self.name_lbl = self._label(hero, self.get_name(), TEXT, 18, True)
-            self.name_lbl.pack()
-            self.status_lbl = self._label(hero, '', ACCENT, 11, True)
-            self.status_lbl.pack(pady=(4, 0))
-            self.hint_lbl = self._label(hero, '', SUBTLE, 9)
+
+            self.name_lbl = self._label(left, self.get_name(), TEXT, 14, True, PANEL)
+            self.name_lbl.pack(pady=(2, 0))
+            self.status_lbl = self._label(left, '', ACCENT, 9, True, PANEL)
+            self.status_lbl.pack(pady=(2, 0))
+            self.hint_lbl = self._label(left, '', SUBTLE, 8, False, PANEL)
             self.hint_lbl.pack()
-            self.ip_lbl = self._label(hero, '', SUBTLE, 10, False, CARD, True)
+            self.ip_lbl = self._label(left, '', SUBTLE, 9, False, PANEL, True)
             self.ip_lbl.configure(cursor='hand2')
-            self.ip_lbl.pack(pady=(6, 10))
+            self.ip_lbl.pack(pady=(4, 6))
             self.ip_lbl.bind('<Button-1>', self._copy_ip)
 
-            self._label(outer, 'НАЙДЕНЫ', SUBTLE, 8, True, BG).pack(anchor='w')
+            left_btns = tk.Frame(left, bg=PANEL)
+            left_btns.pack(side='bottom', pady=(4, 8), padx=6)
+            self.btn_name = PillButton(left_btns, 'Название', self._rename, 72, 28, 'normal', PANEL)
+            self.btn_name.pack(side='left', padx=2)
+            self.btn_dir = PillButton(left_btns, 'Папка', self._pick_save_dir, 64, 28, 'normal', PANEL)
+            self.btn_dir.pack(side='left', padx=2)
+            self.btn_toggle = PillButton(left_btns, 'Выкл. приём', self._toggle_receive, 86, 28, 'normal', PANEL)
+            self.btn_toggle.pack(side='left', padx=2)
+
+            # Правая колонка: найденные, IP, dropzone, прогресс
+            right = tk.Frame(cols, bg=BG)
+            right.grid(row=0, column=1, sticky='nsew')
+
+            peers_box = tk.Frame(right, bg=CARD, highlightbackground=EDGE, highlightthickness=1)
+            peers_box.pack(fill='x', pady=(0, 6))
+            self._label(peers_box, 'НАЙДЕНЫ', SUBTLE, 8, True, CARD).pack(anchor='w', padx=8, pady=(4, 2))
             self.peer_list = tk.Listbox(
-                outer, height=3, bg=CARD, fg=TEXT, selectbackground='#14401c',
-                selectforeground=ACCENT, highlightbackground=EDGE, highlightcolor=ACCENT,
-                highlightthickness=1, relief='flat', bd=0, font=('Segoe UI', 10),
+                peers_box, height=2, bg=PANEL, fg=TEXT, selectbackground='#0e1f13',
+                selectforeground=ACCENT, highlightbackground=EDGE, highlightcolor=EDGE,
+                highlightthickness=1, relief='flat', bd=0, font=('Segoe UI', 9),
                 activestyle='none', exportselection=False)
-            self.peer_list.pack(fill='x', pady=(2, 8))
+            self.peer_list.pack(fill='x', padx=8, pady=(0, 6))
             self.peer_list.bind('<<ListboxSelect>>', self._pick_peer)
 
-            self._label(outer, 'IP ПОЛУЧАТЕЛЯ', SUBTLE, 8, True, BG).pack(anchor='w')
+            ip_box = tk.Frame(right, bg=CARD, highlightbackground=EDGE, highlightthickness=1)
+            ip_box.pack(fill='x', pady=(0, 6))
+            self._label(ip_box, 'IP ПОЛУЧАТЕЛЯ', SUBTLE, 8, True, CARD).pack(anchor='w', padx=8, pady=(4, 2))
+            ip_row = tk.Frame(ip_box, bg=CARD)
+            ip_row.pack(fill='x', padx=8, pady=(0, 6))
             self.ip_var = tk.StringVar(value=self.settings.get('last_ip', ''))
             self.ip_entry = tk.Entry(
-                outer, textvariable=self.ip_var, bg=CARD, fg=TEXT, insertbackground=ACCENT,
+                ip_row, textvariable=self.ip_var, bg=PANEL, fg=TEXT, insertbackground=ACCENT,
                 relief='flat', bd=0, highlightbackground=EDGE, highlightcolor=ACCENT,
-                highlightthickness=1, font=('Consolas', 12))
-            self.ip_entry.pack(fill='x', pady=(2, 10), ipady=6)
+                highlightthickness=1, font=('Consolas', 10))
+            self.ip_entry.pack(side='left', fill='x', expand=True, ipady=4, padx=(0, 6))
+            self.btn_paste_ip = PillButton(ip_row, 'Вставить', self._paste_ip, 74, 26, 'normal', CARD)
+            self.btn_paste_ip.pack(side='right')
 
-            row = tk.Frame(outer, bg=BG)
-            row.pack(pady=(0, 10))
-            self.btn_files = PillButton(row, 'Файлы', self._send_files, 126)
-            self.btn_files.pack(side='left', padx=4)
-            self.btn_folder = PillButton(row, 'Папка', self._send_folder, 126)
-            self.btn_folder.pack(side='left', padx=4)
-            self.btn_text = PillButton(row, 'Текст', self._send_text, 126)
-            self.btn_text.pack(side='left', padx=4)
+            # Зона dropzone + быстрые кнопки отправки
+            self.drop_box = tk.Frame(right, bg=PANEL, highlightbackground=EDGE, highlightthickness=1)
+            self.drop_box.pack(fill='x', pady=(0, 6))
+            self.drop_canvas = tk.Canvas(self.drop_box, height=62, bg=PANEL,
+                                         highlightthickness=0, bd=0)
+            self.drop_canvas.pack(fill='x', padx=8, pady=(5, 2))
+            self.drop_canvas.bind('<Configure>', lambda e: self._draw_dropzone())
+            self.drop_canvas.bind('<Button-1>', lambda e: self._send_files())
 
-            card = tk.Frame(outer, bg=CARD, highlightbackground=EDGE, highlightthickness=1)
-            card.pack(fill='x')
-            top = tk.Frame(card, bg=CARD)
-            top.pack(fill='x', padx=14, pady=(10, 0))
-            self.speed_lbl = self._label(top, '0.0 МБ/с', ACCENT, 16, True)
+            send_row = tk.Frame(self.drop_box, bg=PANEL)
+            send_row.pack(pady=(0, 6))
+            self.btn_files = PillButton(send_row, 'Файлы', self._send_files, 92, 26, 'normal', PANEL)
+            self.btn_files.pack(side='left', padx=3)
+            self.btn_folder = PillButton(send_row, 'Папка', self._send_folder, 92, 26, 'normal', PANEL)
+            self.btn_folder.pack(side='left', padx=3)
+            self.btn_text = PillButton(send_row, 'Текст', self._send_text, 92, 26, 'normal', PANEL)
+            self.btn_text.pack(side='left', padx=3)
+
+            if windnd is not None:
+                try:
+                    windnd.hook_dropfiles(self.drop_box, func=self._on_drop_files, force_win32=True)
+                except Exception:
+                    pass
+
+            # Карточка прогресса
+            prog_card = tk.Frame(right, bg=CARD, highlightbackground=EDGE, highlightthickness=1)
+            prog_card.pack(fill='both', expand=True)
+            top = tk.Frame(prog_card, bg=CARD)
+            top.pack(fill='x', padx=8, pady=(5, 0))
+            self.speed_lbl = self._label(top, '0.0 МБ/с', ACCENT, 11, True, CARD)
             self.speed_lbl.pack(side='left')
-            self.eta_lbl = self._label(top, '--:--', SUBTLE, 11, False, CARD, True)
+            self.eta_lbl = self._label(top, '--:--', SUBTLE, 9, False, CARD, True)
             self.eta_lbl.pack(side='right')
-            self.bar = tk.Canvas(card, height=10, bg=CARD, highlightthickness=0, bd=0)
-            self.bar.pack(fill='x', padx=14, pady=8)
+
+            self.bar = tk.Canvas(prog_card, height=7, bg=CARD, highlightthickness=0, bd=0)
+            self.bar.pack(fill='x', padx=8, pady=4)
             self.bar.bind('<Configure>', lambda e: self._draw_bar())
-            info = tk.Frame(card, bg=CARD)
-            info.pack(fill='x', padx=14)
-            self.pct_lbl = self._label(info, '0.0%', TEXT, 9)
+
+            info = tk.Frame(prog_card, bg=CARD)
+            info.pack(fill='x', padx=8)
+            self.pct_lbl = self._label(info, '0.0%', TEXT, 8, False, CARD)
             self.pct_lbl.pack(side='left')
-            self.size_lbl = self._label(info, '0 Б / 0 Б', SUBTLE, 9, False, CARD, True)
+            self.msg_lbl = self._label(info, 'Готово', SUBTLE, 8, False, CARD)
+            self.msg_lbl.pack(side='left', padx=(8, 0))
+            self.size_lbl = self._label(info, '0 Б / 0 Б', SUBTLE, 8, False, CARD, True)
             self.size_lbl.pack(side='right')
-            self.file_lbl = self._label(card, '', SUBTLE, 9)
-            self.file_lbl.configure(wraplength=400, justify='left', anchor='w')
-            self.file_lbl.pack(fill='x', padx=14, pady=(6, 0))
-            self.msg_lbl = self._label(card, 'Готово', TEXT, 9)
-            self.msg_lbl.configure(wraplength=400, justify='left', anchor='w')
-            self.msg_lbl.pack(fill='x', padx=14, pady=(2, 0))
-            self.stats_lbl = self._label(card, '', SUBTLE, 9, False, CARD, True)
-            self.stats_lbl.configure(wraplength=400, justify='left', anchor='w')
-            self.stats_lbl.pack(fill='x', padx=14, pady=(2, 0))
 
-            self.actions = tk.Frame(card, bg=CARD)
-            self.actions.pack(pady=(8, 10))
-            self.btn_open_file = PillButton(self.actions, 'Открыть файл', self._open_file,
-                                            140, 34, 'accent', CARD)
-            self.btn_open_folder = PillButton(self.actions, 'Открыть папку', self._open_folder,
-                                              140, 34, 'normal', CARD)
+            self.file_lbl = self._label(prog_card, '', SUBTLE, 8, False, CARD)
+            self.file_lbl.pack(fill='x', padx=8, pady=(2, 0))
+            self.stats_lbl = self._label(prog_card, '', SUBTLE, 8, False, CARD, True)
+            self.stats_lbl.pack(fill='x', padx=8)
+
+            self.actions = tk.Frame(prog_card, bg=CARD)
+            self.actions.pack(pady=(3, 5))
+            self.btn_open_file = PillButton(self.actions, 'Открыть', self._open_file,
+                                            96, 25, 'accent', CARD)
+            self.btn_open_folder = PillButton(self.actions, 'Папка', self._open_folder,
+                                              86, 25, 'normal', CARD)
             self.btn_cancel = PillButton(self.actions, 'Отмена', self._cancel,
-                                         140, 34, 'danger', CARD)
+                                         92, 25, 'danger', CARD)
 
-            foot = tk.Frame(outer, bg=BG)
-            foot.pack(pady=(10, 0))
-            self.btn_name = PillButton(foot, 'Название', self._rename, 110, 32)
-            self.btn_name.pack(side='left', padx=3)
-            self.btn_dir = PillButton(foot, 'Папка приёма', self._pick_save_dir, 130, 32)
-            self.btn_dir.pack(side='left', padx=3)
-            self.btn_toggle = PillButton(foot, 'Выкл. приём', self._toggle_receive, 120, 32)
-            self.btn_toggle.pack(side='left', padx=3)
+        # --- отрисовка элементов ---
 
-        # --- обновление экрана ---
+        def _draw_dropzone(self):
+            c = self.drop_canvas
+            c.delete('all')
+            w = max(c.winfo_width(), 40)
+            h = max(c.winfo_height(), 30)
+            c.create_rectangle(2, 2, w - 2, h - 2, outline='#26382b', width=1, dash=(5, 4))
+            cx = w / 2.0
+            # иконка загрузки вниз
+            c.create_line(cx, 12, cx, 26, fill=ACCENT, width=1.5)
+            c.create_line(cx - 5, 21, cx, 26, fill=ACCENT, width=1.5)
+            c.create_line(cx + 5, 21, cx, 26, fill=ACCENT, width=1.5)
+            c.create_line(cx - 7, 29, cx + 7, 29, fill=SUBTLE, width=1.2)
+            hint = 'Перетащите файлы или папку сюда' if windnd is not None else 'Выберите файлы или папку для отправки'
+            c.create_text(cx, 44, text=hint, fill=TEXT, font=('Segoe UI', 9))
 
         def _draw_bar(self):
             self.bar.delete('all')
             w = max(self.bar.winfo_width(), 20)
-            h = 10
-            self.bar.create_rectangle(0, 0, w, h, fill=mix(CARD, '#ffffff', 0.12), outline='')
+            h = 7
+            self.bar.create_rectangle(0, 0, w, h, fill='#111a13', outline='')
             fw = int(w * max(0.0, min(1.0, self.progress)))
             if fw > 0:
                 color = DANGER if self.msg_lbl.cget('fg') == DANGER else ACCENT
@@ -826,38 +931,54 @@ if tk is not None:
             self._draw_bar()
 
         def _set_msg(self, text, error=False):
-            self.msg_lbl.configure(text=text, fg=DANGER if error else TEXT)
+            self.msg_lbl.configure(text=text, fg=DANGER if error else SUBTLE)
 
         def _show_actions(self, file_btn, folder_btn, cancel_btn):
             for b in (self.btn_open_file, self.btn_open_folder, self.btn_cancel):
                 b.pack_forget()
             if file_btn:
-                self.btn_open_file.pack(side='left', padx=4)
+                self.btn_open_file.pack(side='left', padx=3)
             if folder_btn:
-                self.btn_open_folder.pack(side='left', padx=4)
+                self.btn_open_folder.pack(side='left', padx=3)
             if cancel_btn:
-                self.btn_cancel.pack(side='left', padx=4)
+                self.btn_cancel.pack(side='left', padx=3)
 
         def _refresh_hero(self):
             net = self.net
+            name = self.get_name()
+            ips_str = ' · '.join(net.my_ips)
             if self.mode == 'receiving':
                 state, status, hint = 'receiving', 'Идёт приём файла', 'Не закрывайте приложение'
+                top_txt = '%s · Приём' % name
+                dot_color = ACCENT
             elif self.mode == 'sending':
                 state, status, hint = 'sending', 'Идёт отправка', 'Не закрывайте приложение'
+                top_txt = '%s · Отправка' % name
+                dot_color = ACCENT
             elif net.listening:
-                state, status, hint = 'waiting', 'Ожидание отправителя', 'Другие устройства видят вас в сети'
+                state, status, hint = 'waiting', 'Ожидание отправителя', 'Видно в локальной сети'
+                top_txt = '%s · Ожидание' % name
+                dot_color = ACCENT
             elif net.listen_error:
-                state, status, hint = 'error', 'Не удалось включить приём', 'Нажмите, чтобы повторить'
+                state, status, hint = 'error', 'Ошибка запуска приёма', 'Нажмите для повтора'
+                top_txt = '%s · Ошибка' % name
+                dot_color = DANGER
             else:
-                state, status, hint = 'off', 'Приём выключен', 'Нажмите, чтобы включить'
+                state, status, hint = 'off', 'Приём выключен', 'Нажмите для включения'
+                top_txt = '%s · Приём выкл.' % name
+                dot_color = SUBTLE
+
             self.radar.state = state
             self.status_base = status
-            self.status_lbl.configure(
-                text=status, fg=Radar.COLORS.get(state, ACCENT))
+            self.status_lbl.configure(text=status, fg=Radar.COLORS.get(state, ACCENT))
             self.hint_lbl.configure(text=hint)
-            self.name_lbl.configure(text=self.get_name())
-            self.ip_lbl.configure(text='   '.join(net.my_ips))
+            self.name_lbl.configure(text=name)
+            self.ip_lbl.configure(text=ips_str)
+            self.top_status_lbl.configure(text=top_txt)
+            self.top_ip_lbl.configure(text=ips_str)
+            self.top_dot.itemconfigure('all', fill=dot_color)
             self.btn_toggle.set_text('Выкл. приём' if net.listening else 'Вкл. приём')
+
             busy = self.mode != 'idle'
             for b in (self.btn_files, self.btn_folder, self.btn_text):
                 b.set_enabled(not busy)
@@ -880,7 +1001,7 @@ if tk is not None:
             self.peer_list.delete(0, 'end')
             self.peer_ips = []
             for ip, os_name, name in peers:
-                self.peer_list.insert('end', '%s   %s   (%s)' % (name, ip, os_name))
+                self.peer_list.insert('end', '%s · %s (%s)' % (name, ip, os_name))
                 self.peer_ips.append(ip)
             if peers and not self.ip_var.get().strip():
                 self.ip_var.set(peers[0][0])
@@ -923,7 +1044,7 @@ if tk is not None:
                 self.last_path = d['path']
                 self.last_folder = os.path.dirname(d['path'])
                 self._set_progress(d['size'], d['size'], 0.0, '00:00')
-                self._set_msg('Файл принят · сохранено в папку %s' % os.path.basename(self.get_save_dir()))
+                self._set_msg('Принято в %s' % os.path.basename(self.get_save_dir()))
                 self.stats_lbl.configure(text=d.get('stats', ''))
                 self._show_actions(True, True, False)
                 self._refresh_hero()
@@ -945,7 +1066,7 @@ if tk is not None:
                 self.eta_lbl.configure(text='00:00')
                 self.progress = 1.0
                 self._draw_bar()
-                self._set_msg('Отправлено' if d['count'] == 1 else 'Отправлено элементов: %d' % d['count'])
+                self._set_msg('Отправлено' if d['count'] == 1 else 'Отправлено: %d' % d['count'])
                 self.stats_lbl.configure(text=d.get('stats', ''))
                 self._show_actions(False, False, False)
                 self._refresh_hero()
@@ -964,6 +1085,25 @@ if tk is not None:
                 self._draw_bar()
 
         # --- действия ---
+
+        def _paste_ip(self):
+            try:
+                txt = self.root.clipboard_get().strip()
+                if txt:
+                    self.ip_var.set(txt)
+                    self._set_msg('IP вставлен: %s' % txt)
+            except tk.TclError:
+                pass
+
+        def _on_drop_files(self, raw_paths):
+            host = self._ready_to_send()
+            if not host:
+                return
+            items = collect_dropped_items(raw_paths)
+            if not items:
+                self._set_msg('Нет файлов для отправки')
+                return
+            self._start_send(host, items)
 
         def _copy_ip(self, event=None):
             ips = self.net.my_ips
@@ -990,15 +1130,15 @@ if tk is not None:
             win = tk.Toplevel(self.root)
             win.title('Название устройства')
             win.configure(bg=BG)
-            win.geometry('360x130')
+            win.geometry('350x125')
             win.transient(self.root)
             win.grab_set()
-            self._label(win, 'Так вас видят другие устройства:', SUBTLE, 9, False, BG).pack(pady=(14, 4))
+            self._label(win, 'Так вас видят другие устройства:', SUBTLE, 9, False, BG).pack(pady=(12, 4))
             var = tk.StringVar(value=self.settings.get('device_name', '') or self.get_name())
             e = tk.Entry(win, textvariable=var, bg=CARD, fg=TEXT, insertbackground=ACCENT,
                          relief='flat', highlightbackground=EDGE, highlightcolor=ACCENT,
-                         highlightthickness=1, font=('Segoe UI', 11))
-            e.pack(fill='x', padx=20, ipady=5)
+                         highlightthickness=1, font=('Segoe UI', 10))
+            e.pack(fill='x', padx=18, ipady=4)
             e.focus_set()
 
             def ok():
@@ -1008,7 +1148,7 @@ if tk is not None:
                 win.destroy()
                 self._refresh_hero()
 
-            PillButton(win, 'Сохранить', ok, 130, 34, 'accent').pack(pady=12)
+            PillButton(win, 'Сохранить', ok, 120, 30, 'accent', BG).pack(pady=10)
 
         def _pick_save_dir(self):
             d = filedialog.askdirectory(title='Папка для принятых файлов',
@@ -1056,17 +1196,7 @@ if tk is not None:
             root_dir = filedialog.askdirectory(title='Выберите папку')
             if not root_dir:
                 return
-            root_dir = os.path.normpath(root_dir)
-            folder = os.path.basename(root_dir) or 'folder'
-            items = []
-            for cur, dirs, files in os.walk(root_dir):
-                for fn in files:
-                    full = os.path.join(cur, fn)
-                    rel = os.path.relpath(full, root_dir).replace('\\', '/')
-                    try:
-                        items.append({'rel': folder + '/' + rel, 'size': os.path.getsize(full), 'path': full})
-                    except OSError:
-                        pass
+            items = collect_folder_items(root_dir)
             if not items:
                 self._set_msg('Выбранная папка пуста')
                 return
@@ -1079,13 +1209,13 @@ if tk is not None:
             win = tk.Toplevel(self.root)
             win.title('Отправить текст')
             win.configure(bg=BG)
-            win.geometry('420x320')
+            win.geometry('400x280')
             win.transient(self.root)
             win.grab_set()
             txt = tk.Text(win, bg=CARD, fg=TEXT, insertbackground=ACCENT, relief='flat',
                           highlightbackground=EDGE, highlightcolor=ACCENT, highlightthickness=1,
-                          font=('Segoe UI', 11), wrap='word')
-            txt.pack(fill='both', expand=True, padx=14, pady=(14, 8))
+                          font=('Segoe UI', 10), wrap='word')
+            txt.pack(fill='both', expand=True, padx=12, pady=(12, 8))
             txt.focus_set()
 
             def paste():
@@ -1105,9 +1235,9 @@ if tk is not None:
                 self._start_send(host, [item])
 
             row = tk.Frame(win, bg=BG)
-            row.pack(pady=(0, 12))
-            PillButton(row, 'Вставить', paste, 130, 34).pack(side='left', padx=4)
-            PillButton(row, 'Отправить', send, 130, 34, 'accent').pack(side='left', padx=4)
+            row.pack(pady=(0, 10))
+            PillButton(row, 'Вставить', paste, 115, 30, 'normal', BG).pack(side='left', padx=4)
+            PillButton(row, 'Отправить', send, 120, 30, 'accent', BG).pack(side='left', padx=4)
 
         def _cancel(self):
             self.net.request_cancel()
@@ -1143,20 +1273,20 @@ if tk is not None:
             win = tk.Toplevel(self.root)
             win.title('Сообщение от %s' % d.get('sender', ''))
             win.configure(bg=BG)
-            win.geometry('420x320')
+            win.geometry('400x280')
             txt = tk.Text(win, bg=CARD, fg=TEXT, relief='flat', highlightbackground=EDGE,
-                          highlightthickness=1, font=('Segoe UI', 11), wrap='word')
+                          highlightthickness=1, font=('Segoe UI', 10), wrap='word')
             txt.insert('1.0', content)
-            txt.pack(fill='both', expand=True, padx=14, pady=(14, 8))
+            txt.pack(fill='both', expand=True, padx=12, pady=(12, 8))
 
             def copy():
                 self.root.clipboard_clear()
                 self.root.clipboard_append(content)
 
             row = tk.Frame(win, bg=BG)
-            row.pack(pady=(0, 12))
-            PillButton(row, 'Копировать', copy, 130, 34, 'accent').pack(side='left', padx=4)
-            PillButton(row, 'Закрыть', win.destroy, 130, 34).pack(side='left', padx=4)
+            row.pack(pady=(0, 10))
+            PillButton(row, 'Копировать', copy, 115, 30, 'accent', BG).pack(side='left', padx=4)
+            PillButton(row, 'Закрыть', win.destroy, 115, 30, 'normal', BG).pack(side='left', padx=4)
 
         def on_close(self):
             self.net.stop()
