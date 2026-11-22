@@ -185,7 +185,7 @@ class _SendMorphBarState extends State<SendMorphBar> with SingleTickerProviderSt
                 child: GlassCard(
                   isWhite: widget.isWhite,
                   radius: 999,
-                  blur: 22,
+                  blur: 10,
                   padding: EdgeInsets.zero,
                   tint: (widget.active && !widget.expanded) ? p.accent : null,
                   child: Stack(
