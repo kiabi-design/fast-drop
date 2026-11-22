@@ -442,7 +442,7 @@ class GlassCard extends StatelessWidget {
     required this.isWhite,
     this.padding = const EdgeInsets.all(18),
     this.radius = 28,
-    this.blur = 18,
+    this.blur = 10,
     this.tint,
     this.onTap,
   });
@@ -532,7 +532,7 @@ class GlassButton extends StatelessWidget {
         child: GlassCard(
           isWhite: isWhite,
           radius: 999,
-          blur: 18,
+          blur: 10,
           tint: tint,
           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
           child: Row(
@@ -590,7 +590,7 @@ class GlassIconButton extends StatelessWidget {
         child: GlassCard(
           isWhite: isWhite,
           radius: 999,
-          blur: 16,
+          blur: 0,
           tint: danger ? p.danger : null,
           padding: EdgeInsets.zero,
           child: SizedBox(
@@ -631,7 +631,7 @@ class GlassChip extends StatelessWidget {
       child: GlassCard(
         isWhite: isWhite,
         radius: 999,
-        blur: 10,
+        blur: 0,
         tint: selected ? p.accent : null,
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
         child: Row(
@@ -679,7 +679,7 @@ class GlassChoiceTile extends StatelessWidget {
       child: GlassCard(
         isWhite: isWhite,
         radius: 28,
-        blur: 16,
+        blur: 8,
         padding: EdgeInsets.zero,
         child: SizedBox(
           height: 96,
@@ -740,7 +740,7 @@ class GlassTextField extends StatelessWidget {
     return GlassCard(
       isWhite: isWhite,
       radius: maxLines > 1 ? 24 : 999,
-      blur: 18,
+      blur: 8,
       padding: EdgeInsets.only(left: 20, right: suffix == null ? 20 : 6, top: 4, bottom: 4),
       child: TextField(
         controller: controller,
