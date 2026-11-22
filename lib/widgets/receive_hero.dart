@@ -276,7 +276,7 @@ class _ReceiveHeroState extends State<ReceiveHero> with WidgetsBindingObserver {
 }
 
 class _RingsPainter extends CustomPainter {
-  final ValueListenable<double> phase;
+  final ValueNotifier<double> phase;
   final Color color;
   final bool animated;
   final int speed;
