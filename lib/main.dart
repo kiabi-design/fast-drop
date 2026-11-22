@@ -668,6 +668,45 @@ class _TransferHomePageState extends State<TransferHomePage>
 
   // ───────────── UDP-радар ─────────────
 
+  void _handleBeacon(Datagram dg) {
+    final msg = utf8.decode(dg.data, allowMalformed: true).trim();
+    const prefix = 'FASTDROP_READY|';
+    if (!msg.startsWith(prefix)) return;
+    final senderIp = dg.address.address;
+    if (_myIps.contains(senderIp)) return;
+
+    // Формат: FASTDROP_READY|<ОС>|<название>. Старый формат: FASTDROP_READY|<ОС>.
+    final parts = msg.substring(prefix.length).split('|');
+    final os = parts[0].trim().isEmpty ? 'Device' : parts[0].trim();
+    final name = (parts.length > 1 && parts[1].trim().isNotEmpty)
+        ? parts[1].trim()
+        : (os == 'Device' ? 'Устройство' : os);
+
+    if (!mounted) return;
+    final existing = _peers[senderIp];
+    if (existing != null && existing.name == name && existing.os == os) {
+      // Ничего не изменилось — только обновляем время, экран не перерисовываем.
+      existing.lastSeen = DateTime.now();
+      return;
+    }
+
+    setState(() {
+      _peers[senderIp] = DiscoveredPeer(
+        ip: senderIp,
+        name: name,
+        os: os,
+        lastSeen: DateTime.now(),
+      );
+      // Первое найденное устройство подставляем в поле IP, если оно не менялось.
+      if (existing == null) {
+        final cur = _ipController.text.trim();
+        if (cur.isEmpty || cur == '172.20.10.1' || cur == '192.168.1.') {
+          _ipController.text = senderIp;
+        }
+      }
+    });
+  }
+
   Future<void> _startUdpRadar() async {
     try {
       _cleanupTimer?.cancel();
@@ -686,38 +725,11 @@ class _TransferHomePageState extends State<TransferHomePage>
 
       socket.listen((RawSocketEvent event) {
         if (event != RawSocketEvent.read) return;
-        final dg = socket.receive();
-        if (dg == null) return;
-        final msg = utf8.decode(dg.data, allowMalformed: true).trim();
-        const prefix = 'FASTDROP_READY|';
-        if (!msg.startsWith(prefix)) return;
-        final senderIp = dg.address.address;
-        if (_myIps.contains(senderIp)) return;
-
-        // Формат: FASTDROP_READY|<ОС>|<название>. Старый формат: FASTDROP_READY|<ОС>.
-        final parts = msg.substring(prefix.length).split('|');
-        final os = parts[0].trim().isEmpty ? 'Device' : parts[0].trim();
-        final name = (parts.length > 1 && parts[1].trim().isNotEmpty)
-            ? parts[1].trim()
-            : (os == 'Device' ? 'Устройство' : os);
-
-        if (!mounted) return;
-        final isNew = !_peers.containsKey(senderIp);
-        setState(() {
-          _peers[senderIp] = DiscoveredPeer(
-            ip: senderIp,
-            name: name,
-            os: os,
-            lastSeen: DateTime.now(),
-          );
-          // Первое найденное устройство подставляем в поле IP, если оно не менялось.
-          if (isNew) {
-            final cur = _ipController.text.trim();
-            if (cur.isEmpty || cur == '172.20.10.1' || cur == '192.168.1.') {
-              _ipController.text = senderIp;
-            }
-          }
-        });
+        while (true) {
+          final dg = socket.receive();
+          if (dg == null) break;
+          _handleBeacon(dg);
+        }
       });
 
       _cleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
@@ -2064,9 +2076,15 @@ class _TransferHomePageState extends State<TransferHomePage>
               return Stack(
                 children: [
                   Positioned.fill(
-                    child: Transform.translate(
-                      offset: Offset(_drawerWidth * 0.22 * t, 0),
-                      child: home,
+                    child: TickerMode(
+                      enabled: t < 1.0,
+                      child: Offstage(
+                        offstage: t >= 1.0,
+                        child: Transform.translate(
+                          offset: Offset(_drawerWidth * 0.22 * t, 0),
+                          child: home,
+                        ),
+                      ),
                     ),
                   ),
                   if (t > 0)
