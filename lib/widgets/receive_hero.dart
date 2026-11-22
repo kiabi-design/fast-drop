@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,10 @@ import 'liquid_glass.dart';
 enum ReceiveState { waiting, receiving, sending, off, error }
 
 /// Главная карточка: название устройства и анимация ожидания отправителя.
+///
+/// Оптимизация: круги рисуются отдельным слоем (RepaintBoundary) и обновляются
+/// всего ~15 раз в секунду, остальная карточка не перерисовывается. Анимация
+/// останавливается, когда приложение свёрнуто или карточка закрыта другим экраном.
 class ReceiveHero extends StatefulWidget {
   final String deviceName;
   final List<String> ips;
@@ -31,8 +36,16 @@ class ReceiveHero extends StatefulWidget {
   State<ReceiveHero> createState() => _ReceiveHeroState();
 }
 
-class _ReceiveHeroState extends State<ReceiveHero> with SingleTickerProviderStateMixin {
-  late final AnimationController _c;
+class _ReceiveHeroState extends State<ReceiveHero> with WidgetsBindingObserver {
+  /// Интервал обновления кругов, мс (66 мс ≈ 15 кадров/с).
+  static const int _frameMs = 66;
+
+  final ValueNotifier<double> _phase = ValueNotifier<double>(0.0);
+  final ValueNotifier<int> _dots = ValueNotifier<int>(1);
+  final Stopwatch _clock = Stopwatch()..start();
+  Timer? _timer;
+  bool _foreground = true;
+  bool _tickerOn = true;
 
   bool get _animated =>
       widget.state == ReceiveState.waiting ||
@@ -42,24 +55,56 @@ class _ReceiveHeroState extends State<ReceiveHero> with SingleTickerProviderStat
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 3000));
-    if (_animated) _c.repeat();
+    WidgetsBinding.instance.addObserver(this);
+    _syncTimer();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Когда поверх открыт другой экран, Flutter отключает тикеры этого.
+    _tickerOn = TickerMode.of(context);
+    _syncTimer();
   }
 
   @override
   void didUpdateWidget(covariant ReceiveHero oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_animated && !_c.isAnimating) {
-      _c.repeat();
-    } else if (!_animated && _c.isAnimating) {
-      _c.stop();
-    }
+    _syncTimer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    _syncTimer();
   }
 
   @override
   void dispose() {
-    _c.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _timer?.cancel();
+    _phase.dispose();
+    _dots.dispose();
     super.dispose();
+  }
+
+  void _syncTimer() {
+    final shouldRun = _animated && _foreground && _tickerOn;
+    if (shouldRun && _timer == null) {
+      _timer = Timer.periodic(const Duration(milliseconds: _frameMs), (_) => _tick());
+    } else if (!shouldRun && _timer != null) {
+      _timer!.cancel();
+      _timer = null;
+    }
+  }
+
+  void _tick() {
+    final ms = _clock.elapsedMilliseconds;
+    _phase.value = (ms % 3000) / 3000.0;
+    if (widget.state == ReceiveState.waiting) {
+      final n = 1 + ((ms ~/ 500) % 3);
+      if (_dots.value != n) _dots.value = n;
+    }
   }
 
   Color _stateColor(GlassPalette p) {
@@ -119,72 +164,79 @@ class _ReceiveHeroState extends State<ReceiveHero> with SingleTickerProviderStat
     return GlassCard(
       isWhite: widget.isWhite,
       radius: 36,
+      blur: 14,
       padding: const EdgeInsets.fromLTRB(18, 6, 18, 20),
       onTap: tappable ? widget.onTap : null,
-      child: AnimatedBuilder(
-        animation: _c,
-        builder: (context, _) {
-          final t = _c.value;
-          final dotCount = 1 + ((t * 3).floor() % 3);
-          final dots = '.' * dotCount;
-
-          return Column(
+      child: Column(
+        children: [
+          SizedBox(
+            height: 210,
+            width: double.infinity,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Отдельный слой: перерисовываются только круги.
+                RepaintBoundary(
+                  child: CustomPaint(
+                    size: Size.infinite,
+                    painter: _RingsPainter(
+                      phase: _phase,
+                      color: color,
+                      animated: _animated,
+                      speed: widget.state == ReceiveState.waiting ? 1 : 2,
+                    ),
+                  ),
+                ),
+                GlassCard(
+                  isWhite: widget.isWhite,
+                  radius: 999,
+                  blur: 0,
+                  tint: color,
+                  padding: EdgeInsets.zero,
+                  child: SizedBox(
+                    width: 92,
+                    height: 92,
+                    child: Icon(widget.icon, size: 44, color: color),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            widget.deviceName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: p.fg,
+              fontSize: 26,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              SizedBox(
-                height: 210,
-                width: double.infinity,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CustomPaint(
-                      size: Size.infinite,
-                      painter: _RingsPainter(
-                        t: t,
-                        color: color,
-                        animated: _animated,
-                        speed: widget.state == ReceiveState.waiting ? 1 : 2,
-                      ),
-                    ),
-                    GlassCard(
-                      isWhite: widget.isWhite,
-                      radius: 999,
-                      blur: 12,
-                      tint: color,
-                      padding: EdgeInsets.zero,
-                      child: SizedBox(
-                        width: 92,
-                        height: 92,
-                        child: Icon(
-                          widget.icon,
-                          size: 44,
-                          color: color,
-                        ),
-                      ),
-                    ),
-                  ],
+              Flexible(
+                child: Text(
+                  _statusText(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-              Text(
-                widget.deviceName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: p.fg,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Flexible(
-                    child: Text(
-                      _statusText(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+              if (showDots)
+                SizedBox(
+                  width: 20,
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: _dots,
+                    builder: (context, n, _) => Text(
+                      '.' * n,
                       style: TextStyle(
                         color: color,
                         fontSize: 15,
@@ -192,62 +244,49 @@ class _ReceiveHeroState extends State<ReceiveHero> with SingleTickerProviderStat
                       ),
                     ),
                   ),
-                  if (showDots)
-                    SizedBox(
-                      width: 20,
-                      child: Text(
-                        dots,
-                        style: TextStyle(
-                          color: color,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                _hintText(),
-                textAlign: TextAlign.center,
-                style: TextStyle(color: p.subtle, fontSize: 12),
-              ),
-              if (widget.ips.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: widget.ips.map((ip) {
-                    return GlassChip(
-                      label: ip,
-                      mono: true,
-                      isWhite: widget.isWhite,
-                      onTap: () => widget.onCopyIp(ip),
-                    );
-                  }).toList(),
                 ),
-              ],
             ],
-          );
-        },
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _hintText(),
+            textAlign: TextAlign.center,
+            style: TextStyle(color: p.subtle, fontSize: 12),
+          ),
+          if (widget.ips.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: widget.ips.map((ip) {
+                return GlassChip(
+                  label: ip,
+                  mono: true,
+                  isWhite: widget.isWhite,
+                  onTap: () => widget.onCopyIp(ip),
+                );
+              }).toList(),
+            ),
+          ],
+        ],
       ),
     );
   }
 }
 
 class _RingsPainter extends CustomPainter {
-  final double t;
+  final ValueListenable<double> phase;
   final Color color;
   final bool animated;
   final int speed;
 
   _RingsPainter({
-    required this.t,
+    required this.phase,
     required this.color,
     required this.animated,
     required this.speed,
-  });
+  }) : super(repaint: phase);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -267,6 +306,7 @@ class _RingsPainter extends CustomPainter {
       return;
     }
 
+    final t = phase.value;
     for (int i = 0; i < 3; i++) {
       final ph = (t * speed + i / 3.0) % 1.0;
       final r = startR + (maxR - startR) * ph;
@@ -292,5 +332,5 @@ class _RingsPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _RingsPainter old) =>
-      old.t != t || old.color != color || old.animated != animated || old.speed != speed;
+      old.color != color || old.animated != animated || old.speed != speed;
 }
