@@ -10,10 +10,9 @@ import UIKit
 
 private let logger = Logger(subsystem: "com.fastdrop", category: "transfer")
 
-@MainActor
 final class TransferService: ObservableObject {
-    @Published private(set) var sessions: [TransferSession] = []
-    @Published var error: String?
+    @MainActor @Published private(set) var sessions: [TransferSession] = []
+    @MainActor @Published var error: String?
 
     private let queue = DispatchQueue(label: "fastdrop.transfer", qos: .userInitiated)
     private let parameters: NWParameters
@@ -34,7 +33,9 @@ final class TransferService: ObservableObject {
         do {
             listener = try NWListener(using: parameters, on: kTransferPort)
         } catch {
-            self.error = "Failed to start listener: \(error.localizedDescription)"
+            Task { @MainActor in
+                self.error = "Failed to start listener: \(error.localizedDescription)"
+            }
             return
         }
 
@@ -53,7 +54,7 @@ final class TransferService: ObservableObject {
 
         listener?.newConnectionHandler = { [weak self] connection in
             Task { @MainActor in
-                await self?.handleIncomingConnection(connection)
+                self?.handleIncomingConnection(connection)
             }
         }
 
@@ -73,7 +74,7 @@ final class TransferService: ObservableObject {
                 switch state {
                 case .ready:
                     logger.info("Incoming connection ready")
-                    await self?.receiveHandshake(connection, sessionId: sessionId)
+                    self?.receiveHandshake(connection, sessionId: sessionId)
                 case .failed(let err):
                     logger.error("Incoming connection failed: \(err.localizedDescription)")
                     self?.cleanupConnection(sessionId)
@@ -93,22 +94,34 @@ final class TransferService: ObservableObject {
                 guard let self = self else { return }
                 if let data = data, !data.isEmpty {
                     buffer.append(data)
+                    // Copy buffer to avoid inout capture in escaping closure
+                    var bufferCopy = buffer
+                    var expectedHeaderCopy = expectedHeader
+                    var currentFileCopy = currentFile
+                    var fileHandleCopy = fileHandle
+                    var receivedChunksCopy = receivedChunks
                     Task { @MainActor in
-                        self.processBuffer(&buffer, connection: connection, sessionId: sessionId,
-                                          expectedHeader: &expectedHeader,
-                                          currentFile: &currentFile,
-                                          fileHandle: &fileHandle,
-                                          receivedChunks: &receivedChunks)
+                        self.processBuffer(&bufferCopy, connection: connection, sessionId: sessionId,
+                                          expectedHeader: &expectedHeaderCopy,
+                                          currentFile: &currentFileCopy,
+                                          fileHandle: &fileHandleCopy,
+                                          receivedChunks: &receivedChunksCopy)
+                        // Copy back results
+                        buffer = bufferCopy
+                        expectedHeader = expectedHeaderCopy
+                        currentFile = currentFileCopy
+                        fileHandle = fileHandleCopy
+                        receivedChunks = receivedChunksCopy
                     }
                 }
                 if let error = error {
                     logger.error("Receive error: \(error.localizedDescription)")
-                    self.cleanupConnection(sessionId)
+                    Task { @MainActor in self.cleanupConnection(sessionId) }
                     return
                 }
                 if isComplete {
                     logger.info("Connection complete")
-                    self.cleanupConnection(sessionId)
+                    Task { @MainActor in self.cleanupConnection(sessionId) }
                     return
                 }
                 receiveLoop()
@@ -213,6 +226,7 @@ final class TransferService: ObservableObject {
     }
 
     // ─── Sender API ───
+    @MainActor
     func sendFiles(_ files: [TransferFile], to peer: DiscoveredPeer) -> TransferSession {
         let session = TransferSession(direction: .send, peer: peer, files: files)
         sessions.append(session)
@@ -362,6 +376,7 @@ final class TransferService: ObservableObject {
         session.overallProgress = 1.0
     }
 
+    @MainActor
     private func cleanupConnection(_ sessionId: UUID) {
         activeConnections[sessionId]?.cancel()
         activeConnections.removeValue(forKey: sessionId)

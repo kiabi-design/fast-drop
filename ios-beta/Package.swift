@@ -25,7 +25,8 @@ let package = Package(
         .executableTarget(
             name: "FastDropApp",
             dependencies: ["FastDropCore"],
-            path: "FastDrop/App"
+            path: "FastDrop",
+            sources: ["App", "UI"]
         )
     ]
 )
