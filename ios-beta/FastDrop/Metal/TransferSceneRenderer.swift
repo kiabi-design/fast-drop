@@ -1,4 +1,4 @@
-import MetalKit
+@preconcurrency import MetalKit
 import SwiftUI
 
 // ──────────────────────────────────────────────
@@ -17,39 +17,51 @@ struct BlackHoleState {
     var pulse: Float           // phase
 }
 
+// TransferSceneRenderer is non-isolated because MTKViewDelegate methods run on the render thread
 final class TransferSceneRenderer: NSObject, MTKViewDelegate {
+    // ─── Metal resources (nonisolated - accessed from render thread) ───
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private var pipelineState: MTLRenderPipelineState!
-    private var uniformsBuffer: MTLBuffer!
+    nonisolated(unsafe) private var pipelineState: MTLRenderPipelineState!
+    nonisolated(unsafe) private var uniformsBuffer: MTLBuffer!
 
-    private var rings: [TransferRing] = []
-    private var blackHole = BlackHoleState(radius: 0.0, pulse: 0.0)
-    private var overallProgress: Float = 0.0
-    private var viewportSize: CGSize = .zero
-    private var pixelRatio: Float = 1.0
-    private var lastTime: CFTimeInterval = 0
+    // ─── State (nonisolated - accessed from render thread) ───
+    nonisolated(unsafe) private var rings: [TransferRing] = []
+    nonisolated(unsafe) private var blackHole = BlackHoleState(radius: 0.0, pulse: 0.0)
+    nonisolated(unsafe) private var overallProgress: Float = 0.0
+    nonisolated(unsafe) private var viewportSize: CGSize = .zero
+    nonisolated(unsafe) private var pixelRatio: Float = 1.0
+    nonisolated(unsafe) private var lastTime: CFTimeInterval = 0
     private let center = SIMD2<Float>(0.5, 0.5)
 
-    init?(metalView: MTKView) {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let queue = device.makeCommandQueue() else { return nil }
+    // Private init - use create() factory method
+    private init(device: MTLDevice, queue: MTLCommandQueue) {
         self.device = device
         self.commandQueue = queue
         super.init()
+        createPipeline()
+        uniformsBuffer = device.makeBuffer(length: MemoryLayout<TransferUniforms>.stride, options: .storageModeShared)
+    }
+
+    // Factory method to create and configure on @MainActor
+    @MainActor
+    static func create(metalView: MTKView) -> TransferSceneRenderer? {
+        guard let device = MTLCreateSystemDefaultDevice(),
+              let queue = device.makeCommandQueue() else { return nil }
+        let renderer = TransferSceneRenderer(device: device, queue: queue)
 
         metalView.device = device
-        metalView.delegate = self
+        metalView.delegate = renderer
         metalView.preferredFramesPerSecond = 120
         metalView.framebufferOnly = true
         metalView.colorPixelFormat = .bgra8Unorm
         metalView.isPaused = false
 
-        createPipeline(metalView: metalView)
-        uniformsBuffer = device.makeBuffer(length: MemoryLayout<TransferUniforms>.stride, options: .storageModeShared)
+        return renderer
     }
 
-    private func createPipeline(metalView: MTKView) {
+    // ─── Pipeline ───
+    private func createPipeline() {
         guard let library = device.makeDefaultLibrary(),
               let vertexFn = library.makeFunction(name: "vertexMain"),
               let fragmentFn = library.makeFunction(name: "transferFragment") else {
@@ -59,7 +71,7 @@ final class TransferSceneRenderer: NSObject, MTKViewDelegate {
         let desc = MTLRenderPipelineDescriptor()
         desc.vertexFunction = vertexFn
         desc.fragmentFunction = fragmentFn
-        desc.colorAttachments[0].pixelFormat = metalView.colorPixelFormat
+        desc.colorAttachments[0].pixelFormat = .bgra8Unorm
         desc.colorAttachments[0].isBlendingEnabled = true
         desc.colorAttachments[0].rgbBlendOperation = .add
         desc.colorAttachments[0].alphaBlendOperation = .add
@@ -71,7 +83,8 @@ final class TransferSceneRenderer: NSObject, MTKViewDelegate {
         pipelineState = try! device.makeRenderPipelineState(descriptor: desc)
     }
 
-    // ─── Public API ───
+    // ─── Public API (@MainActor for SwiftUI) ───
+    @MainActor
     func startTransfer(ringCount: Int, viewportSize: CGSize) {
         self.viewportSize = viewportSize
         rings = (0..<min(ringCount, 8)).map { i in
@@ -88,36 +101,42 @@ final class TransferSceneRenderer: NSObject, MTKViewDelegate {
         overallProgress = 0.0
     }
 
+    @MainActor
     func updateRingProgress(index: Int, progress: Float) {
         guard index < rings.count else { return }
         rings[index].progress = progress
     }
 
+    @MainActor
     func setRingInactive(index: Int) {
         guard index < rings.count else { return }
         rings[index].isActive = false
     }
 
+    @MainActor
     func updateBlackHole(radius: Float, pulse: Float) {
         blackHole.radius = radius
         blackHole.pulse = pulse
     }
 
+    @MainActor
     func setOverallProgress(_ p: Float) {
         overallProgress = p
     }
 
+    @MainActor
     func updateViewport(_ size: CGSize, scale: CGFloat) {
         viewportSize = size
         pixelRatio = Float(scale)
     }
 
-    // ─── MTKViewDelegate ───
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        updateViewport(size, scale: view.contentScaleFactor)
+    // ─── MTKViewDelegate (nonisolated - runs on render thread) ───
+    nonisolated func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        viewportSize = size
+        pixelRatio = Float(view.contentScaleFactor)
     }
 
-    func draw(in view: MTKView) {
+    nonisolated func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor else { return }
 

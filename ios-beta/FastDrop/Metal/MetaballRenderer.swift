@@ -1,4 +1,4 @@
-import MetalKit
+@preconcurrency import MetalKit
 import SwiftUI
 import Combine
 
@@ -18,8 +18,8 @@ struct MetaballData {
 // @Published properties are @MainActor isolated via property wrapper
 final class MetaballRenderer: NSObject, MTKViewDelegate {
     // ─── Metal resources (nonisolated - accessed from render thread) ───
-    nonisolated(unsafe) private let device: MTLDevice
-    nonisolated(unsafe) private let commandQueue: MTLCommandQueue
+    private let device: MTLDevice
+    private let commandQueue: MTLCommandQueue
     nonisolated(unsafe) private var pipelineState: MTLRenderPipelineState!
     nonisolated(unsafe) private var uniformsBuffer: MTLBuffer!
     nonisolated(unsafe) private var ballsBuffer: MTLBuffer!
