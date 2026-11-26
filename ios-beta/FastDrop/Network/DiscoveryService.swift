@@ -69,7 +69,7 @@ final class DiscoveryService: ObservableObject {
         for result in results {
             guard case .service(let name, _, _, _) = result.endpoint else { continue }
 
-            var peer = DiscoveredPeer(
+            let peer = DiscoveredPeer(
                 endpoint: result.endpoint,
                 name: name,
                 deviceType: "Unknown"
@@ -91,9 +91,9 @@ final class DiscoveryService: ObservableObject {
         var merged: [DiscoveredPeer] = []
         for new in newPeers {
             if let existing = peers.first(where: { $0.endpoint == new.endpoint }) {
-                var updated = new
-                updated.lastSeen = existing.lastSeen
-                merged.append(updated)
+                // Preserve lastSeen from existing peer
+                new.lastSeen = existing.lastSeen
+                merged.append(new)
             } else {
                 merged.append(new)
             }

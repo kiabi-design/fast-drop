@@ -34,31 +34,36 @@ final class MetaballRenderer: NSObject, MTKViewDelegate {
     // ─── Published for SwiftUI (@MainActor isolated) ───
     @MainActor @Published var fps: Double = 60
 
-    init?(metalView: MTKView) {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let queue = device.makeCommandQueue() else { return nil }
+    // Private init - use create() factory method
+    private init(device: MTLDevice, queue: MTLCommandQueue) {
         self.device = device
         self.commandQueue = queue
         super.init()
-
-        // Configure MTKView on main thread before first draw
-        Task { @MainActor in
-            metalView.device = device
-            metalView.delegate = self
-            metalView.preferredFramesPerSecond = 120
-            metalView.framebufferOnly = true
-            metalView.colorPixelFormat = .bgra8Unorm
-            metalView.depthStencilPixelFormat = .invalid
-            metalView.sampleCount = 1
-            metalView.isPaused = false
-        }
-
-        createPipeline(metalView: metalView)
+        createPipeline()
         createBuffers()
     }
 
+    // Factory method to create and configure on @MainActor
+    @MainActor
+    static func create(metalView: MTKView) -> MetaballRenderer? {
+        guard let device = MTLCreateSystemDefaultDevice(),
+              let queue = device.makeCommandQueue() else { return nil }
+        let renderer = MetaballRenderer(device: device, queue: queue)
+
+        metalView.device = device
+        metalView.delegate = renderer
+        metalView.preferredFramesPerSecond = 120
+        metalView.framebufferOnly = true
+        metalView.colorPixelFormat = .bgra8Unorm
+        metalView.depthStencilPixelFormat = .invalid
+        metalView.sampleCount = 1
+        metalView.isPaused = false
+
+        return renderer
+    }
+
     // ─── Pipeline ───
-    private func createPipeline(metalView: MTKView) {
+    private func createPipeline() {
         guard let library = device.makeDefaultLibrary(),
               let vertexFn = library.makeFunction(name: "vertexMain"),
               let fragmentFn = library.makeFunction(name: "metaballFragment") else {
@@ -68,7 +73,7 @@ final class MetaballRenderer: NSObject, MTKViewDelegate {
         let desc = MTLRenderPipelineDescriptor()
         desc.vertexFunction = vertexFn
         desc.fragmentFunction = fragmentFn
-        desc.colorAttachments[0].pixelFormat = metalView.colorPixelFormat
+        desc.colorAttachments[0].pixelFormat = .bgra8Unorm
         desc.colorAttachments[0].isBlendingEnabled = true
         desc.colorAttachments[0].rgbBlendOperation = .add
         desc.colorAttachments[0].alphaBlendOperation = .add

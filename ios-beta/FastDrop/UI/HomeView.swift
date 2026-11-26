@@ -24,9 +24,9 @@ struct HomeView: View {
     @State private var chevronOffset: CGFloat = 0
 
     private let peers: [DiscoveredPeer] = [
-        DiscoveredPeer(endpoint: .hostPort(host: "192.168.0.14", port: 14680), name: "Ivan's MacBook", deviceType: "Mac", ipAddress: "192.168.0.14", port: 14680),
-        DiscoveredPeer(endpoint: .hostPort(host: "192.168.0.31", port: 14680), name: "Pixel 9", deviceType: "Android", ipAddress: "192.168.0.31", port: 14680),
-        DiscoveredPeer(endpoint: .hostPort(host: "192.168.0.52", port: 14680), name: "Офис-ПК", deviceType: "Windows", ipAddress: "192.168.0.52", port: 14680)
+        DiscoveredPeer(endpoint: .hostPort(host: "192.168.0.14", port: 14680), name: "Ivan's MacBook", deviceType: "Mac"),
+        DiscoveredPeer(endpoint: .hostPort(host: "192.168.0.31", port: 14680), name: "Pixel 9", deviceType: "Android"),
+        DiscoveredPeer(endpoint: .hostPort(host: "192.168.0.52", port: 14680), name: "Офис-ПК", deviceType: "Windows")
     ]
 
     var body: some View {
@@ -396,6 +396,12 @@ struct MetalViewRepresentable: UIViewRepresentable {
         view.framebufferOnly = true
         view.isPaused = false
         view.preferredFramesPerSecond = 120
+
+        // Create renderer on main actor
+        Task { @MainActor in
+            renderer = MetaballRenderer.create(metalView: view)
+        }
+
         return view
     }
 

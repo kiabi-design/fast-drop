@@ -118,7 +118,8 @@ struct ErrorPayload: Codable {
 let kServiceType = "_fastdrop._tcp"
 let kServiceDomain = "local."
 
-struct DiscoveredPeer: Identifiable, Hashable {
+// Use class for @unchecked Sendable conformance (avoids Swift 6 captured var issues)
+final class DiscoveredPeer: Identifiable, Hashable, @unchecked Sendable {
     let id = UUID()
     let endpoint: NWEndpoint
     let name: String
@@ -126,6 +127,20 @@ struct DiscoveredPeer: Identifiable, Hashable {
     var ipAddress: String?
     var port: UInt16?
     var lastSeen: Date = Date()
+
+    init(endpoint: NWEndpoint, name: String, deviceType: String) {
+        self.endpoint = endpoint
+        self.name = name
+        self.deviceType = deviceType
+    }
+
+    // Hashable conformance
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+    static func == (lhs: DiscoveredPeer, rhs: DiscoveredPeer) -> Bool {
+        lhs.id == rhs.id
+    }
 }
 
 // ──────────────────────────────────────────────
