@@ -16,17 +16,23 @@ let package = Package(
         .target(
             name: "FastDropCore",
             dependencies: [],
+            path: "FastDrop",
+            exclude: ["App", "UI"],
             resources: [
-                .process("Resources/Shaders.metallib")
+                .process("Metal/MetaballShader.metal"),
+                .process("Metal/TransferSceneRenderer.swift"),
+                .process("Resources/Info.plist")
             ]
         ),
         .executableTarget(
             name: "FastDropApp",
-            dependencies: ["FastDropCore"]
+            dependencies: ["FastDropCore"],
+            path: "FastDrop/App"
         ),
         .testTarget(
             name: "FastDropTests",
-            dependencies: ["FastDropCore"]
+            dependencies: ["FastDropCore"],
+            path: "FastDropTests"
         )
     ]
 )
