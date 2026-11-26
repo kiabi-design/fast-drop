@@ -9,7 +9,7 @@ options:
 
 targets:
   FastDropCore:
-    type: framework
+    type: static
     platform: iOS
     sources:
       - FastDrop/Metal

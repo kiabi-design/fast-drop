@@ -8,7 +8,7 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        .library(name: "FastDropCore", targets: ["FastDropCore"]),
+        .library(name: "FastDropCore", type: .static, targets: ["FastDropCore"]),
         .executable(name: "FastDropApp", targets: ["FastDropApp"])
     ],
     dependencies: [],
