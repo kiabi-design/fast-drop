@@ -13,14 +13,26 @@ on:
       - '.github/workflows/ios-beta.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   PROJECT_PATH: ios-beta
   SCHEME: FastDropApp
   BUNDLE_ID: com.kiabi.fastdrop.beta
+  # Абсолютный путь: одинаков для ВСЕХ шагов, независимо от working-directory
+  BUILD_DIR: ${{ github.workspace }}/build
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+
+defaults:
+  run:
+    # bash с pipefail: ошибка xcodebuild больше не прячется за `| xcbeautify`
+    shell: bash
 
 jobs:
   build-ipa:
-    name: Build Unsigned IPA (iPhone 15 Pro)
+    name: Build Unsigned IPA
     runs-on: macos-latest
     timeout-minutes: 30
 
@@ -28,88 +40,121 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Latest Xcode
+      - name: Xcode version
         run: |
-          # Find the latest Xcode automatically (by modification time, newest first)
-          XCODE_PATH=$(ls -dt /Applications/Xcode*.app 2>/dev/null | head -1)
-          if [ -z "$XCODE_PATH" ]; then
-            echo "❌ No Xcode found in /Applications"
-            ls -la /Applications/
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install tools (XcodeGen, xcbeautify)
+        run: |
+          brew install xcodegen
+          command -v xcbeautify >/dev/null || brew install xcbeautify
+
+      - name: Generate Xcode project
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: |
+          xcodegen generate --spec project.yml
+          ls -la
+
+      - name: Archive for device (unsigned)
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: |
+          mkdir -p "$BUILD_DIR/Archive"
+          xcodebuild archive \
+            -project FastDrop.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$BUILD_DIR/Archive/$SCHEME.xcarchive" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$BUILD_DIR/archive.log" \
+            | xcbeautify
+
+      # exportArchive для неподписанной сборки не работает (требует сертификат),
+      # поэтому IPA собираем вручную: Payload/<App>.app -> zip.
+      - name: Package unsigned IPA
+        run: |
+          shopt -s nullglob
+          apps=("$BUILD_DIR/Archive/$SCHEME.xcarchive/Products/Applications"/*.app)
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "❌ .app не найден внутри xcarchive"
+            find "$BUILD_DIR/Archive" -maxdepth 5 | sort
             exit 1
           fi
-          sudo xcode-select -s "$XCODE_PATH"
-          echo "✅ Selected: $XCODE_PATH"
-          xcodebuild -version
+          APP_PATH="${apps[0]}"
+          echo "📦 App: $APP_PATH"
 
-      - name: Resolve SPM Dependencies
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: xcodebuild -resolvePackageDependencies -scheme ${{ env.SCHEME }}
-
-      - name: Archive for Device (unsigned)
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          mkdir -p ../build/Archive
-          xcodebuild archive \
-            -scheme ${{ env.SCHEME }} \
-            -destination 'generic/platform=iOS' \
-            -configuration Release \
-            -archivePath ../build/Archive/${{ env.SCHEME }}.xcarchive \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcbeautify
-
-      - name: Export Unsigned IPA
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          cat > ../ExportOptions.plist << EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>development</string>
-            <key>teamID</key>
-            <string></string>
-            <key>compileBitcode</key>
-            <false/>
-            <key>stripSwiftSymbols</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
-
-          xcodebuild -exportArchive \
-            -archivePath ../build/Archive/${{ env.SCHEME }}.xcarchive \
-            -exportPath ../build/Export \
-            -exportOptionsPlist ../ExportOptions.plist \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcbeautify
+          rm -rf "$BUILD_DIR/Export"
+          mkdir -p "$BUILD_DIR/Export/Payload"
+          cp -R "$APP_PATH" "$BUILD_DIR/Export/Payload/"
+          cd "$BUILD_DIR/Export"
+          zip -qry FastDrop-Beta-unsigned.ipa Payload
+          rm -rf Payload
 
       - name: Verify IPA
-        working-directory: ${{ env.PROJECT_PATH }}
         run: |
-          IPA_PATH=$(find ../build/Export -name "*.ipa" | head -1)
-          if [ -z "$IPA_PATH" ]; then
-            echo "❌ IPA not found"
+          shopt -s nullglob
+          ipas=("$BUILD_DIR"/Export/*.ipa)
+          if [ ${#ipas[@]} -eq 0 ]; then
+            echo "❌ IPA not found in $BUILD_DIR/Export"
+            find "$BUILD_DIR" -maxdepth 3 | sort
             exit 1
           fi
+          IPA_PATH="${ipas[0]}"
           echo "✅ IPA found: $IPA_PATH"
-          echo "Size: $(ls -lh "$IPA_PATH" | awk '{print $5}')"
-          unzip -l "$IPA_PATH" | head -30
+          echo "Size: $(du -h "$IPA_PATH" | cut -f1)"
 
-      - name: Upload IPA Artifact
+          # Без `unzip | head` — при pipefail head вызывает SIGPIPE (код 141)
+          LISTING="$RUNNER_TEMP/ipa_listing.txt"
+          unzip -l "$IPA_PATH" > "$LISTING"
+          head -30 "$LISTING"
+
+          grep -q "Payload/[^/]*\.app/Info\.plist" "$LISTING" \
+            || { echo "❌ В IPA нет Info.plist"; exit 1; }
+          grep -q "Payload/[^/]*\.app/default\.metallib" "$LISTING" \
+            || { echo "❌ В IPA нет default.metallib (Metal-шейдеры не скомпилированы)"; exit 1; }
+
+          TMP="$(mktemp -d)"
+          unzip -q "$IPA_PATH" -d "$TMP"
+          apps=("$TMP"/Payload/*.app)
+          APP="${apps[0]}"
+
+          ACTUAL_ID="$(plutil -extract CFBundleIdentifier raw -o - "$APP/Info.plist")"
+          echo "Bundle ID: $ACTUAL_ID"
+          [ "$ACTUAL_ID" = "$BUNDLE_ID" ] \
+            || { echo "❌ Ожидался $BUNDLE_ID"; exit 1; }
+
+          EXEC="$(plutil -extract CFBundleExecutable raw -o - "$APP/Info.plist")"
+          ARCHS="$(lipo -archs "$APP/$EXEC")"
+          echo "Архитектуры: $ARCHS"
+          case " $ARCHS " in
+            *" arm64 "*) ;;
+            *) echo "❌ В бинарнике нет arm64"; exit 1 ;;
+          esac
+
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: FastDrop-Beta-Unsigned-IPA
-          path: ${{ env.PROJECT_PATH }}/../build/Export/*.ipa
+          path: build/Export/*.ipa
+          if-no-files-found: error
           retention-days: 30
 
-      - name: Upload dSYM Artifact
+      - name: Upload dSYM artifact
         uses: actions/upload-artifact@v4
         with:
           name: FastDrop-Beta-dSYM
-          path: ${{ env.PROJECT_PATH }}/../build/Archive/${{ env.SCHEME }}.xcarchive/dSYMs/
+          path: build/Archive/${{ env.SCHEME }}.xcarchive/dSYMs/
+          if-no-files-found: warn
           retention-days: 30
+
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastDrop-Beta-build-log
+          path: build/archive.log
+          if-no-files-found: ignore
+          retention-days: 7
