@@ -61,17 +61,22 @@ final class TransferService: ObservableObject {
         listener?.start(queue: queue)
     }
 
-    private func handleIncomingConnection(_ connection: NWConnection) async {
-        let sessionId = UUID()
+    // State holder for receive loop (avoids Swift 6 captured var mutation issues)
+    private final class ReceiveState {
         var buffer = Data()
         var expectedHeader: FastDropHeader?
         var currentFile: TransferFile?
         var fileHandle: FileHandle?
         var receivedChunks = Set<Int>()
+    }
 
-        connection.stateUpdateHandler = { [weak self] state in
+    private func handleIncomingConnection(_ connection: NWConnection) async {
+        let sessionId = UUID()
+        let state = ReceiveState()
+
+        connection.stateUpdateHandler = { [weak self] stateUpdate in
             Task { @MainActor in
-                switch state {
+                switch stateUpdate {
                 case .ready:
                     logger.info("Incoming connection ready")
                     self?.receiveHandshake(connection, sessionId: sessionId)
@@ -93,25 +98,13 @@ final class TransferService: ObservableObject {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { [weak self] data, _, isComplete, error in
                 guard let self = self else { return }
                 if let data = data, !data.isEmpty {
-                    buffer.append(data)
-                    // Copy buffer to avoid inout capture in escaping closure
-                    var bufferCopy = buffer
-                    var expectedHeaderCopy = expectedHeader
-                    var currentFileCopy = currentFile
-                    var fileHandleCopy = fileHandle
-                    var receivedChunksCopy = receivedChunks
+                    state.buffer.append(data)
                     Task { @MainActor in
-                        self.processBuffer(&bufferCopy, connection: connection, sessionId: sessionId,
-                                          expectedHeader: &expectedHeaderCopy,
-                                          currentFile: &currentFileCopy,
-                                          fileHandle: &fileHandleCopy,
-                                          receivedChunks: &receivedChunksCopy)
-                        // Copy back results
-                        buffer = bufferCopy
-                        expectedHeader = expectedHeaderCopy
-                        currentFile = currentFileCopy
-                        fileHandle = fileHandleCopy
-                        receivedChunks = receivedChunksCopy
+                        self.processBuffer(&state.buffer, connection: connection, sessionId: sessionId,
+                                          expectedHeader: &state.expectedHeader,
+                                          currentFile: &state.currentFile,
+                                          fileHandle: &state.fileHandle,
+                                          receivedChunks: &state.receivedChunks)
                     }
                 }
                 if let error = error {
@@ -238,6 +231,7 @@ final class TransferService: ObservableObject {
         return session
     }
 
+    @MainActor
     private func performSend(session: TransferSession) async {
         guard let peerEndpoint = peerEndpoint(from: session.peer) else {
             failSession(session, error: "Invalid peer endpoint")
@@ -287,6 +281,7 @@ final class TransferService: ObservableObject {
         connection.send(content: header.encode() + data, completion: .contentProcessed { _ in })
     }
 
+    @MainActor
     private func sendFile(_ file: TransferFile, connection: NWConnection, session: TransferSession) async {
         guard let url = file.url, let handle = try? FileHandle(forReadingFrom: url) else {
             failSession(session, error: "Cannot read file: \(file.name)")
