@@ -87,9 +87,9 @@ final class TransferService: ObservableObject {
                     self?.receiveHandshake(connection, sessionId: sessionId)
                 case .failed(let err):
                     logger.error("Incoming connection failed: \(err.localizedDescription)")
-                    await self?.cleanupConnection(sessionId)
+                    self?.cleanupConnection(sessionId)
                 case .cancelled:
-                    await self?.cleanupConnection(sessionId)
+                    self?.cleanupConnection(sessionId)
                 default: break
                 }
             }
@@ -115,14 +115,14 @@ final class TransferService: ObservableObject {
                 if let error = error {
                     logger.error("Receive error: \(error.localizedDescription)")
                     Task { @MainActor [weak self] in
-                        await self?.cleanupConnection(sessionId)
+                        self?.cleanupConnection(sessionId)
                     }
                     return
                 }
                 if isComplete {
                     logger.info("Connection complete")
                     Task { @MainActor [weak self] in
-                        await self?.cleanupConnection(sessionId)
+                        self?.cleanupConnection(sessionId)
                     }
                     return
                 }
@@ -198,7 +198,7 @@ final class TransferService: ObservableObject {
         case .cancel:
             logger.info("Transfer cancelled")
             fileHandle?.closeFile()
-            Task { await self.cleanupConnection(sessionId) }
+            cleanupConnection(sessionId)
         default:
             break
         }
@@ -241,7 +241,7 @@ final class TransferService: ObservableObject {
 
     private func performSend(session: TransferSession) async {
         guard let peerEndpoint = peerEndpoint(from: session.peer) else {
-            await failSession(session, error: "Invalid peer endpoint")
+            failSession(session, error: "Invalid peer endpoint")
             return
         }
 
@@ -257,7 +257,7 @@ final class TransferService: ObservableObject {
                         self?.sendHandshake(connection, session: session)
                         continuation.resume()
                     case .failed(let err):
-                        await self?.failSession(session, error: err.localizedDescription)
+                        self?.failSession(session, error: err.localizedDescription)
                         continuation.resume()
                     case .cancelled:
                         continuation.resume()
@@ -273,7 +273,7 @@ final class TransferService: ObservableObject {
             await sendFile(file, connection: connection, session: session)
         }
 
-        await completeSession(session)
+        completeSession(session)
     }
 
     private func sendHandshake(_ connection: NWConnection, session: TransferSession) {
@@ -290,7 +290,7 @@ final class TransferService: ObservableObject {
 
     private func sendFile(_ file: TransferFile, connection: NWConnection, session: TransferSession) async {
         guard let url = file.url, let handle = try? FileHandle(forReadingFrom: url) else {
-            await failSession(session, error: "Cannot read file: \(file.name)")
+            failSession(session, error: "Cannot read file: \(file.name)")
             return
         }
 
@@ -328,7 +328,6 @@ final class TransferService: ObservableObject {
             offset += Int64(chunkData.count)
             chunkIndex += 1
 
-            // updateFileProgress is @MainActor, but we're already in an async context from performSend which is @MainActor
             updateFileProgress(session, file: file, progress: Float(offset) / Float(file.size))
         }
 
@@ -375,7 +374,7 @@ final class TransferService: ObservableObject {
         session.overallProgress = 1.0
     }
 
-    private func cleanupConnection(_ sessionId: UUID) async {
+    private func cleanupConnection(_ sessionId: UUID) {
         activeConnections[sessionId]?.cancel()
         activeConnections.removeValue(forKey: sessionId)
     }
