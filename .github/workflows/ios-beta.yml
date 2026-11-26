@@ -28,10 +28,11 @@ jobs:
 
       - name: Select Latest Xcode
         run: |
-          # Find the latest Xcode 15.x automatically
-          XCODE_PATH=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          # Find the latest Xcode automatically (by modification time, newest first)
+          XCODE_PATH=$(ls -dt /Applications/Xcode*.app 2>/dev/null | head -1)
           if [ -z "$XCODE_PATH" ]; then
-            echo "❌ No Xcode found"
+            echo "❌ No Xcode found in /Applications"
+            ls -la /Applications/
             exit 1
           fi
           sudo xcode-select -s "$XCODE_PATH"
