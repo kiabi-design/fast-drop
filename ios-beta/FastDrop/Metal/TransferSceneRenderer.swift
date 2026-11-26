@@ -139,25 +139,38 @@ final class TransferSceneRenderer: NSObject, MTKViewDelegate {
     }
 
     private func updateUniforms(time: Float) {
+        var ringProgress: (Float, Float, Float, Float, Float, Float, Float, Float) = (0,0,0,0,0,0,0,0)
+        var ringCenter: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>,
+                         SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>) = (SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0),
+                                                                                     SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0))
+        var ringRadius: (Float, Float, Float, Float, Float, Float, Float, Float) = (0,0,0,0,0,0,0,0)
+
+        for (i, ring) in rings.enumerated() where i < 8 {
+            switch i {
+            case 0: ringProgress.0 = ring.progress; ringCenter.0 = ring.center; ringRadius.0 = ring.maxRadius
+            case 1: ringProgress.1 = ring.progress; ringCenter.1 = ring.center; ringRadius.1 = ring.maxRadius
+            case 2: ringProgress.2 = ring.progress; ringCenter.2 = ring.center; ringRadius.2 = ring.maxRadius
+            case 3: ringProgress.3 = ring.progress; ringCenter.3 = ring.center; ringRadius.3 = ring.maxRadius
+            case 4: ringProgress.4 = ring.progress; ringCenter.4 = ring.center; ringRadius.4 = ring.maxRadius
+            case 5: ringProgress.5 = ring.progress; ringCenter.5 = ring.center; ringRadius.5 = ring.maxRadius
+            case 6: ringProgress.6 = ring.progress; ringCenter.6 = ring.center; ringRadius.6 = ring.maxRadius
+            case 7: ringProgress.7 = ring.progress; ringCenter.7 = ring.center; ringRadius.7 = ring.maxRadius
+            default: break
+            }
+        }
+
         var u = TransferUniforms(
             time: time,
             center: center,
             progress: overallProgress,
             ringCount: UInt32(rings.filter { $0.isActive }.count),
-            ringProgress: (0,0,0,0,0,0,0,0),
-            ringCenter: (SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0),
-                         SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0), SIMD2<Float>(0,0)),
-            ringRadius: (0,0,0,0,0,0,0,0),
+            ringProgress: ringProgress,
+            ringCenter: ringCenter,
+            ringRadius: ringRadius,
             blackHoleRadius: blackHole.radius,
             blackHolePulse: blackHole.pulse,
             _pad: (0,0)
         )
-
-        for (i, ring) in rings.enumerated() where i < 8 {
-            u.ringProgress.(i) = ring.progress
-            u.ringCenter.(i) = ring.center
-            u.ringRadius.(i) = ring.maxRadius
-        }
 
         memcpy(uniformsBuffer.contents(), &u, MemoryLayout<TransferUniforms>.stride)
     }
