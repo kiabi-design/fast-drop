@@ -1,5 +1,6 @@
 import SwiftUI
 import MetalKit
+import Network
 import FastDropCore
 
 // ──────────────────────────────────────────────
@@ -132,7 +133,9 @@ struct HomeView: View {
             .environment(\.colorScheme, appState.colorScheme)
             .onAppear {
                 setupInitialState()
-                renderer = MetaballRenderer(metalView: metalView)
+                Task { @MainActor in
+                    renderer = MetaballRenderer.create(metalView: metalView)
+                }
                 chevronOffset = -6
             }
             .onChange(of: drops.count) { _, _ in updateHint() }

@@ -69,8 +69,12 @@ extension FileDrop {
                 sizeMB: spec.2,
                 icon: spec.1,
                 pos: bestPos,
+                vel: .zero,
+                radius: r,
                 phase: Double.random(in: 0...2 * .pi),
-                radius: r
+                state: .idle,
+                progress: 0,
+                stretch: 0
             ))
         }
         return drops
