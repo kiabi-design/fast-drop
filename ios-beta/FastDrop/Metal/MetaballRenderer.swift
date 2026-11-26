@@ -118,13 +118,13 @@ public final class MetaballRenderer: NSObject, MTKViewDelegate {
 
     // ─── MTKViewDelegate (@MainActor - runs on main thread in Swift 6) ───
     @MainActor
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+    public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         viewportSize = size
         pixelRatio = Float(view.contentScaleFactor)
     }
 
     @MainActor
-    func draw(in view: MTKView) {
+    public func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor else { return }
 
@@ -157,8 +157,7 @@ public final class MetaballRenderer: NSObject, MTKViewDelegate {
             time: time,
             resolution: SIMD2<Float>(Float(viewportSize.width), Float(viewportSize.height)),
             pixelRatio: pixelRatio,
-            threshold: 0.378,
-            _pad: (0, 0, 0)
+            threshold: 0.378
         )
         memcpy(uniformsBuffer.contents(), &u, MemoryLayout<Uniforms>.stride)
     }
@@ -173,8 +172,7 @@ public final class MetaballRenderer: NSObject, MTKViewDelegate {
                 vel: ball.vel,
                 radius: normRadius,
                 stretch: ball.stretch,
-                phase: ball.phase,
-                _pad: (0, 0, 0)
+                phase: ball.phase
             )
         }
     }

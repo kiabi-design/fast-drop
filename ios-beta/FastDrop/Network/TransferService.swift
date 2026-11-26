@@ -105,7 +105,8 @@ public final class TransferService: ObservableObject {
     // Static method to run the receive loop without capturing self in a non-Sendable way
     private static func startReceiveLoop(connection: NWConnection, sessionId: UUID, state: ReceiveState, queue: DispatchQueue, service: TransferService) {
         // Use a recursive function that doesn't capture inout parameters
-        func receiveLoop() {
+        // Mark as @Sendable to satisfy Swift 6 concurrency
+        @Sendable func receiveLoop() {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { @Sendable [weak service] data, _, isComplete, error in
                 guard let service = service else { return }
 
@@ -134,7 +135,7 @@ public final class TransferService: ObservableObject {
                     return
                 }
 
-                // Continue the loop
+                // Continue the loop - call recursively
                 receiveLoop()
             }
         }

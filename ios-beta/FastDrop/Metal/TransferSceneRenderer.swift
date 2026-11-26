@@ -144,13 +144,13 @@ public final class TransferSceneRenderer: NSObject, MTKViewDelegate {
 
     // ─── MTKViewDelegate (@MainActor - runs on main thread in Swift 6) ───
     @MainActor
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+    public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         viewportSize = size
         pixelRatio = Float(view.contentScaleFactor)
     }
 
     @MainActor
-    func draw(in view: MTKView) {
+    public func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor else { return }
 
@@ -201,8 +201,7 @@ public final class TransferSceneRenderer: NSObject, MTKViewDelegate {
             ringCenter: ringCenter,
             ringRadius: ringRadius,
             blackHoleRadius: blackHole.radius,
-            blackHolePulse: blackHole.pulse,
-            _pad: (0,0)
+            blackHolePulse: blackHole.pulse
         )
 
         memcpy(uniformsBuffer.contents(), &u, MemoryLayout<TransferUniforms>.stride)
