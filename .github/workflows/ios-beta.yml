@@ -89,6 +89,7 @@ jobs:
             | xcbeautify
 
       - name: Verify IPA
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           IPA_PATH=$(find ../build/Export -name "*.ipa" | head -1)
           if [ -z "$IPA_PATH" ]; then
@@ -103,12 +104,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FastDrop-Beta-Unsigned-IPA
-          path: build/Export/*.ipa
+          path: ${{ env.PROJECT_PATH }}/../build/Export/*.ipa
           retention-days: 30
 
       - name: Upload dSYM Artifact
         uses: actions/upload-artifact@v4
         with:
           name: FastDrop-Beta-dSYM
-          path: build/Archive/${{ env.SCHEME }}.xcarchive/dSYMs/
+          path: ${{ env.PROJECT_PATH }}/../build/Archive/${{ env.SCHEME }}.xcarchive/dSYMs/
           retention-days: 30

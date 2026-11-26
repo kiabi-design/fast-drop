@@ -192,15 +192,12 @@ final class TransferService: ObservableObject {
     private func handleChunk(_ data: Data, connection: NWConnection, currentFile: inout TransferFile?,
                              fileHandle: inout FileHandle?, receivedChunks: inout Set<Int>) {
         // Simplified chunk parsing - in production use proper binary format
-        guard let file = currentFile, let handle = fileHandle else { return }
+        guard var file = currentFile, let handle = fileHandle else { return }
         // Write data (skip simple header parsing for brevity)
         handle.write(data)
-        // Update progress - capture file reference locally to avoid inout capture in escaping closure
-        let fileRef = file
-        Task { @MainActor in
-            fileRef.progress = min(1.0, fileRef.progress + Float(data.count) / Float(fileRef.size))
-            // Progress updates are handled via the session's @Published properties
-        }
+        // Update progress
+        file.progress = min(1.0, file.progress + Float(data.count) / Float(file.size))
+        currentFile = file
     }
 
     private func sendHandshakeAck(_ connection: NWConnection) {
@@ -229,7 +226,7 @@ final class TransferService: ObservableObject {
 
     private func performSend(session: TransferSession) async {
         guard let peerEndpoint = peerEndpoint(from: session.peer) else {
-            await failSession(session, error: "Invalid peer endpoint")
+            failSession(session, error: "Invalid peer endpoint")
             return
         }
 
@@ -261,7 +258,7 @@ final class TransferService: ObservableObject {
             await sendFile(file, connection: connection, session: session)
         }
 
-        await completeSession(session)
+        completeSession(session)
     }
 
     private func sendHandshake(_ connection: NWConnection, session: TransferSession) {
@@ -278,7 +275,7 @@ final class TransferService: ObservableObject {
 
     private func sendFile(_ file: TransferFile, connection: NWConnection, session: TransferSession) async {
         guard let url = file.url, let handle = try? FileHandle(forReadingFrom: url) else {
-            await failSession(session, error: "Cannot read file: \(file.name)")
+            failSession(session, error: "Cannot read file: \(file.name)")
             return
         }
 
