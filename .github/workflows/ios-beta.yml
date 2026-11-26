@@ -113,7 +113,8 @@ jobs:
 
           grep -q "Payload/[^/]*\.app/Info\.plist" "$LISTING" \
             || { echo "❌ В IPA нет Info.plist"; exit 1; }
-          grep -q "Payload/[^/]*\.app/default\.metallib" "$LISTING" \
+          # Check for default.metallib at app root OR inside any framework (for static framework builds)
+          grep -qE "Payload/[^/]*\.app/(default\.metallib|Frameworks/[^/]*\.framework/default\.metallib)" "$LISTING" \
             || { echo "❌ В IPA нет default.metallib (Metal-шейдеры не скомпилированы)"; exit 1; }
 
           TMP="$(mktemp -d)"
