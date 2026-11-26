@@ -25,6 +25,7 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGN_IDENTITY: ""
+        GENERATE_INFOPLIST_FILE: "YES"
       configs:
         Release:
           STRIP_SWIFT_SYMBOLS: "YES"
