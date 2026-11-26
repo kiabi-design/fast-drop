@@ -195,9 +195,10 @@ final class TransferService: ObservableObject {
         guard let file = currentFile, let handle = fileHandle else { return }
         // Write data (skip simple header parsing for brevity)
         handle.write(data)
-        // Update progress
+        // Update progress - capture file reference locally to avoid inout capture in escaping closure
+        let fileRef = file
         Task { @MainActor in
-            currentFile?.progress = min(1.0, (currentFile?.progress ?? 0) + Float(data.count) / Float(file.size))
+            fileRef.progress = min(1.0, fileRef.progress + Float(data.count) / Float(fileRef.size))
             // Progress updates are handled via the session's @Published properties
         }
     }
