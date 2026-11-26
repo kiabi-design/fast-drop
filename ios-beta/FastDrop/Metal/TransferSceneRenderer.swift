@@ -57,7 +57,7 @@ public final class TransferSceneRenderer: NSObject, MTKViewDelegate {
 
     // Factory method to create and configure on @MainActor
     @MainActor
-    static func create(metalView: MTKView) -> TransferSceneRenderer? {
+    public static func create(metalView: MTKView) -> TransferSceneRenderer? {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
         let renderer = TransferSceneRenderer(device: device, queue: queue)

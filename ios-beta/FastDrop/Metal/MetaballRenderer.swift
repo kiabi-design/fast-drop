@@ -53,7 +53,7 @@ public final class MetaballRenderer: NSObject, MTKViewDelegate {
 
     // Factory method to create and configure on @MainActor
     @MainActor
-    static func create(metalView: MTKView) -> MetaballRenderer? {
+    public static func create(metalView: MTKView) -> MetaballRenderer? {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
         let renderer = MetaballRenderer(device: device, queue: queue)
