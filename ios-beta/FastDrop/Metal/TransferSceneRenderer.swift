@@ -132,12 +132,12 @@ public final class TransferSceneRenderer: NSObject, MTKViewDelegate {
     }
 
     @MainActor
-    func setOverallProgress(_ p: Float) {
+    public func setOverallProgress(_ p: Float) {
         overallProgress = p
     }
 
     @MainActor
-    func updateViewport(_ size: CGSize, scale: CGFloat) {
+    public func updateViewport(_ size: CGSize, scale: CGFloat) {
         viewportSize = size
         pixelRatio = Float(scale)
     }

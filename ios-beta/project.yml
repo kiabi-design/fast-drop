@@ -9,8 +9,9 @@ options:
 
 targets:
   FastDropCore:
-    type: framework
+    type: library
     platform: iOS
+    productType: static
     sources:
       - FastDrop/Metal
       - FastDrop/Network
@@ -27,6 +28,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: ""
         GENERATE_INFOPLIST_FILE: "YES"
         SKIP_INSTALL: "YES"
+        MACH_O_TYPE: staticlib
       configs:
         Release:
           STRIP_SWIFT_SYMBOLS: "YES"
