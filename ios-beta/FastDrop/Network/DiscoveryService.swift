@@ -17,14 +17,13 @@ final class DiscoveryService: ObservableObject {
     private let parameters: NWParameters
     private var cancellables = Set<AnyCancellable>()
 
-    override init() {
+    init() {
         // Use TCP with Bonjour
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.enableKeepalive = true
         tcpOptions.keepaliveIdle = 10
         self.parameters = NWParameters(tls: nil, tcp: tcpOptions)
         self.parameters.includePeerToPeer = true
-        super.init()
     }
 
     func startScanning() {

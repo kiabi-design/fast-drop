@@ -167,6 +167,12 @@ final class TransferSession: ObservableObject {
     @Published var status: TransferStatus = .waiting
     @Published var error: String?
 
+    init(direction: TransferDirection, peer: DiscoveredPeer, files: [TransferFile]) {
+        self.direction = direction
+        self.peer = peer
+        self.files = files
+    }
+
     var totalBytes: Int64 { files.reduce(0) { $0 + $1.size } }
     var transferredBytes: Int64 { files.reduce(0) { $0 + Int64(Float($1.size) * $1.progress) } }
 }

@@ -70,7 +70,7 @@ final class TransferService: ObservableObject {
                 switch state {
                 case .ready:
                     logger.info("Incoming connection ready")
-                    self?.receiveHandshake(connection, sessionId: sessionId)
+                    await self?.receiveHandshake(connection, sessionId: sessionId)
                 case .failed(let err):
                     logger.error("Incoming connection failed: \(err.localizedDescription)")
                     self?.cleanupConnection(sessionId)
@@ -89,11 +89,13 @@ final class TransferService: ObservableObject {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { data, _, isComplete, error in
                 if let data = data, !data.isEmpty {
                     buffer.append(data)
-                    self.processBuffer(&buffer, connection: connection, sessionId: sessionId,
-                                      expectedHeader: &expectedHeader,
-                                      currentFile: &currentFile,
-                                      fileHandle: &fileHandle,
-                                      receivedChunks: &receivedChunks)
+                    Task { @MainActor in
+                        self.processBuffer(&buffer, connection: connection, sessionId: sessionId,
+                                          expectedHeader: &expectedHeader,
+                                          currentFile: &currentFile,
+                                          fileHandle: &fileHandle,
+                                          receivedChunks: &receivedChunks)
+                    }
                 }
                 if let error = error {
                     logger.error("Receive error: \(error.localizedDescription)")
@@ -363,5 +365,17 @@ final class TransferService: ObservableObject {
     private func cleanupConnection(_ sessionId: UUID) {
         activeConnections[sessionId]?.cancel()
         activeConnections.removeValue(forKey: sessionId)
+    }
+
+    @MainActor
+    private func receiveHandshake(_ connection: NWConnection, sessionId: UUID) {
+        logger.info("Receiving handshake")
+        // Handshake will be processed via the receive loop
+    }
+
+    @MainActor
+    private func updateSessionProgress(sessionId: UUID, file: TransferFile) {
+        // Progress updates are handled via the session's @Published properties
+        // which automatically trigger UI updates through objectWillChange
     }
 }

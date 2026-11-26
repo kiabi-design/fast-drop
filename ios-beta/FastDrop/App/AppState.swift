@@ -18,42 +18,21 @@ final class AppState: ObservableObject {
 
     private init() {
         // Load saved preferences
-        if let scheme = ColorScheme(rawValue: storedScheme) {
-            colorScheme = scheme
+        if storedScheme == "light" {
+            colorScheme = .light
+        } else if storedScheme == "dark" {
+            colorScheme = .dark
         }
         hasCompletedOnboarding = storedOnboarding
     }
 
     func setColorScheme(_ scheme: ColorScheme) {
         colorScheme = scheme
-        storedScheme = scheme.rawValue
+        storedScheme = scheme == .light ? "light" : "dark"
     }
 
     func completeOnboarding() {
         hasCompletedOnboarding = true
         storedOnboarding = true
-    }
-}
-
-// ──────────────────────────────────────────────
-// ColorScheme Extension
-// ──────────────────────────────────────────────
-
-extension ColorScheme {
-    init?(rawValue: String) {
-        switch rawValue {
-        case "light": self = .light
-        case "dark": self = .dark
-        case "system": self = .light // fallback, actual system handled by view
-        default: return nil
-        }
-    }
-
-    var rawValue: String {
-        switch self {
-        case .light: return "light"
-        case .dark: return "dark"
-        @unknown default: return "system"
-        }
     }
 }

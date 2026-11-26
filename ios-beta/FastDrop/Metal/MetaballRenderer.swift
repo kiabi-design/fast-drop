@@ -44,7 +44,7 @@ final class MetaballRenderer: NSObject, MTKViewDelegate {
         metalView.preferredFramesPerSecond = 120
         metalView.framebufferOnly = true
         metalView.colorPixelFormat = .bgra8Unorm
-        metalView.depthStencilPixelFormat = .none
+        metalView.depthStencilPixelFormat = .invalid
         metalView.sampleCount = 1
         metalView.isPaused = false
 
