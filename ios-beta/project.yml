@@ -12,13 +12,10 @@ targets:
     type: framework
     platform: iOS
     sources:
-      - path: FastDrop
-        excludes:
-          - App
-          - UI
-          - App/Resources/Info.plist
+      - FastDrop/Metal
+      - FastDrop/Network
     resources:
-      - Metal/MetaballShader.metal
+      - FastDrop/Metal/MetaballShader.metal
     settings:
       base:
         SWIFT_VERSION: "6.0"
@@ -36,10 +33,10 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: FastDrop/App
-      - path: FastDrop/UI
+      - FastDrop/App
+      - FastDrop/UI
     resources:
-      - path: FastDrop/App/Resources
+      - FastDrop/App/Resources
     dependencies:
       - target: FastDropCore
     settings:
