@@ -5,10 +5,12 @@ on:
     branches: [beta/ios-native]
     paths:
       - 'ios-beta/**'
+      - '.github/workflows/ios-beta.yml'
   pull_request:
     branches: [beta/ios-native]
     paths:
       - 'ios-beta/**'
+      - '.github/workflows/ios-beta.yml'
   workflow_dispatch:
 
 env:
