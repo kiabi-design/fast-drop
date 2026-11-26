@@ -106,12 +106,12 @@ public final class MetaballRenderer: NSObject, MTKViewDelegate {
 
     // ─── Public API (@MainActor for SwiftUI) ───
     @MainActor
-    func updateBalls(_ newBalls: [MetaballData]) {
+    public func updateBalls(_ newBalls: [MetaballData]) {
         balls = Array(newBalls.prefix(maxBalls))
     }
 
     @MainActor
-    func updateViewport(_ size: CGSize, scale: CGFloat) {
+    public func updateViewport(_ size: CGSize, scale: CGFloat) {
         viewportSize = size
         pixelRatio = Float(scale)
     }

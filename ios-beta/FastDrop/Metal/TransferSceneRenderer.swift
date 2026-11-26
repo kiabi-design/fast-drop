@@ -97,7 +97,7 @@ public final class TransferSceneRenderer: NSObject, MTKViewDelegate {
 
     // ─── Public API (@MainActor for SwiftUI) ───
     @MainActor
-    func startTransfer(ringCount: Int, viewportSize: CGSize) {
+    public func startTransfer(ringCount: Int, viewportSize: CGSize) {
         self.viewportSize = viewportSize
         rings = (0..<min(ringCount, 8)).map { i in
             let angle = Float(i) * 2 * .pi / Float(ringCount)
@@ -114,19 +114,19 @@ public final class TransferSceneRenderer: NSObject, MTKViewDelegate {
     }
 
     @MainActor
-    func updateRingProgress(index: Int, progress: Float) {
+    public func updateRingProgress(index: Int, progress: Float) {
         guard index < rings.count else { return }
         rings[index].progress = progress
     }
 
     @MainActor
-    func setRingInactive(index: Int) {
+    public func setRingInactive(index: Int) {
         guard index < rings.count else { return }
         rings[index].isActive = false
     }
 
     @MainActor
-    func updateBlackHole(radius: Float, pulse: Float) {
+    public func updateBlackHole(radius: Float, pulse: Float) {
         blackHole.radius = radius
         blackHole.pulse = pulse
     }

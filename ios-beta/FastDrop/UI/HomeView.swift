@@ -26,9 +26,9 @@ struct HomeView: View {
     @State private var chevronOffset: CGFloat = 0
 
     private let peers: [DiscoveredPeer] = [
-        DiscoveredPeer(endpoint: NWEndpoint.hostPort(host: NWEndpoint.Host("192.168.0.14"), port: NWEndpoint.Port(14680)!), name: "Ivan's MacBook", deviceType: "Mac"),
-        DiscoveredPeer(endpoint: NWEndpoint.hostPort(host: NWEndpoint.Host("192.168.0.31"), port: NWEndpoint.Port(14680)!), name: "Pixel 9", deviceType: "Android"),
-        DiscoveredPeer(endpoint: NWEndpoint.hostPort(host: NWEndpoint.Host("192.168.0.52"), port: NWEndpoint.Port(14680)!), name: "Офис-ПК", deviceType: "Windows")
+        DiscoveredPeer(endpoint: NWEndpoint.hostPort(host: NWEndpoint.Host("192.168.0.14"), port: 14680), name: "Ivan's MacBook", deviceType: "Mac"),
+        DiscoveredPeer(endpoint: NWEndpoint.hostPort(host: NWEndpoint.Host("192.168.0.31"), port: 14680), name: "Pixel 9", deviceType: "Android"),
+        DiscoveredPeer(endpoint: NWEndpoint.hostPort(host: NWEndpoint.Host("192.168.0.52"), port: 14680), name: "Офис-ПК", deviceType: "Windows")
     ]
 
     var body: some View {
