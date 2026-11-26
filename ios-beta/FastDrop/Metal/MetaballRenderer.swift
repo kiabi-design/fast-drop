@@ -14,23 +14,25 @@ struct MetaballData {
     var phase: Float           // idle wobble
 }
 
+// MetaballRenderer is non-isolated because MTKViewDelegate methods run on the render thread
+// @Published properties are @MainActor isolated via property wrapper
 final class MetaballRenderer: NSObject, MTKViewDelegate {
-    // ─── Metal resources ───
-    private let device: MTLDevice
-    private let commandQueue: MTLCommandQueue
-    private var pipelineState: MTLRenderPipelineState!
-    private var uniformsBuffer: MTLBuffer!
-    private var ballsBuffer: MTLBuffer!
+    // ─── Metal resources (nonisolated - accessed from render thread) ───
+    nonisolated(unsafe) private let device: MTLDevice
+    nonisolated(unsafe) private let commandQueue: MTLCommandQueue
+    nonisolated(unsafe) private var pipelineState: MTLRenderPipelineState!
+    nonisolated(unsafe) private var uniformsBuffer: MTLBuffer!
+    nonisolated(unsafe) private var ballsBuffer: MTLBuffer!
 
-    // ─── State ───
-    private var balls: [MetaballData] = []
-    private var viewportSize: CGSize = .zero
-    private var pixelRatio: Float = 1.0
-    private var lastTime: CFTimeInterval = 0
+    // ─── State (nonisolated - accessed from render thread) ───
+    nonisolated(unsafe) private var balls: [MetaballData] = []
+    nonisolated(unsafe) private var viewportSize: CGSize = .zero
+    nonisolated(unsafe) private var pixelRatio: Float = 1.0
+    nonisolated(unsafe) private var lastTime: CFTimeInterval = 0
     private let maxBalls = 32
 
-    // ─── Published for SwiftUI ───
-    @Published var fps: Double = 60
+    // ─── Published for SwiftUI (@MainActor isolated) ───
+    @MainActor @Published var fps: Double = 60
 
     init?(metalView: MTKView) {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -39,14 +41,17 @@ final class MetaballRenderer: NSObject, MTKViewDelegate {
         self.commandQueue = queue
         super.init()
 
-        metalView.device = device
-        metalView.delegate = self
-        metalView.preferredFramesPerSecond = 120
-        metalView.framebufferOnly = true
-        metalView.colorPixelFormat = .bgra8Unorm
-        metalView.depthStencilPixelFormat = .invalid
-        metalView.sampleCount = 1
-        metalView.isPaused = false
+        // Configure MTKView on main thread before first draw
+        Task { @MainActor in
+            metalView.device = device
+            metalView.delegate = self
+            metalView.preferredFramesPerSecond = 120
+            metalView.framebufferOnly = true
+            metalView.colorPixelFormat = .bgra8Unorm
+            metalView.depthStencilPixelFormat = .invalid
+            metalView.sampleCount = 1
+            metalView.isPaused = false
+        }
 
         createPipeline(metalView: metalView)
         createBuffers()
@@ -86,29 +91,36 @@ final class MetaballRenderer: NSObject, MTKViewDelegate {
         ballsBuffer = device.makeBuffer(length: MemoryLayout<Metaball>.stride * maxBalls, options: .storageModeShared)
     }
 
-    // ─── Public API ───
+    // ─── Public API (@MainActor for SwiftUI) ───
+    @MainActor
     func updateBalls(_ newBalls: [MetaballData]) {
         balls = Array(newBalls.prefix(maxBalls))
     }
 
+    @MainActor
     func updateViewport(_ size: CGSize, scale: CGFloat) {
         viewportSize = size
         pixelRatio = Float(scale)
     }
 
-    // ─── MTKViewDelegate ───
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        updateViewport(size, scale: view.contentScaleFactor)
+    // ─── MTKViewDelegate (nonisolated - runs on render thread) ───
+    nonisolated func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        viewportSize = size
+        pixelRatio = Float(view.contentScaleFactor)
     }
 
-    func draw(in view: MTKView) {
+    nonisolated func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor else { return }
 
         let now = CACurrentMediaTime()
         let dt = lastTime > 0 ? now - lastTime : 1/60
         lastTime = now
-        fps = 1.0 / dt
+
+        // Update FPS on main thread
+        Task { @MainActor in
+            self.fps = 1.0 / dt
+        }
 
         updateUniforms(time: Float(now))
         updateBallsBuffer()

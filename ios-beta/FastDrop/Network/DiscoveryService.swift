@@ -15,7 +15,6 @@ final class DiscoveryService: ObservableObject {
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "fastdrop.discovery", qos: .userInitiated)
     private let parameters: NWParameters
-    private var cancellables = Set<AnyCancellable>()
 
     init() {
         // Use TCP with Bonjour
@@ -111,7 +110,8 @@ final class DiscoveryService: ObservableObject {
         }
     }
 
-    private func resolveEndpoint(_ endpoint: NWEndpoint, completion: @escaping (String?, UInt16?) -> Void) {
+    // Use @Sendable for the completion closure
+    private func resolveEndpoint(_ endpoint: NWEndpoint, completion: @escaping @Sendable (String?, UInt16?) -> Void) {
         let connection = NWConnection(to: endpoint, using: parameters)
         connection.stateUpdateHandler = { state in
             switch state {

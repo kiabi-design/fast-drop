@@ -62,7 +62,7 @@ struct FastDropHeader {
         let flags = data[6]
         let sequence = data[7..<11].withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
         let payloadLength = data[11..<15].withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-        var header = FastDropHeader(type: type, sequence: sequence, payloadLength: payloadLength, flags: flags)
+        let header = FastDropHeader(type: type, sequence: sequence, payloadLength: payloadLength, flags: flags)
         return header
     }
 }
@@ -157,7 +157,7 @@ enum TransferStatus {
     case cancelled
 }
 
-final class TransferSession: ObservableObject {
+final class TransferSession: ObservableObject, @unchecked Sendable {
     let id = UUID()
     let direction: TransferDirection
     let peer: DiscoveredPeer
