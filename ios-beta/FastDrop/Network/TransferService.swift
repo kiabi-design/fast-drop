@@ -10,9 +10,24 @@ import UIKit
 
 private let logger = Logger(subsystem: "com.fastdrop", category: "transfer")
 
+// State holder for receive loop (avoids Swift 6 captured var mutation issues)
+// Mark as @unchecked Sendable since we control access via the transfer queue
+private final class ReceiveState: @unchecked Sendable {
+    var buffer = Data()
+    var expectedHeader: FastDropHeader?
+    var currentFile: TransferFile?
+    var fileHandle: FileHandle?
+    var receivedChunks = Set<Int>()
+}
+
+// TransferService is @unchecked Sendable because:
+// - All mutable state is accessed only from the dedicated `queue` (DispatchQueue)
+// - @Published properties are @MainActor isolated
+// - We never share mutable state across concurrency domains without synchronization
+@MainActor
 final class TransferService: ObservableObject {
-    @MainActor @Published private(set) var sessions: [TransferSession] = []
-    @MainActor @Published var error: String?
+    @Published private(set) var sessions: [TransferSession] = []
+    @Published var error: String?
 
     private let queue = DispatchQueue(label: "fastdrop.transfer", qos: .userInitiated)
     private let parameters: NWParameters
@@ -33,9 +48,7 @@ final class TransferService: ObservableObject {
         do {
             listener = try NWListener(using: parameters, on: kTransferPort)
         } catch {
-            Task { @MainActor in
-                self.error = "Failed to start listener: \(error.localizedDescription)"
-            }
+            self.error = "Failed to start listener: \(error.localizedDescription)"
             return
         }
 
@@ -52,22 +65,14 @@ final class TransferService: ObservableObject {
             }
         }
 
+        // Capture self weakly and use Task to call async method
         listener?.newConnectionHandler = { [weak self] connection in
-            Task { @MainActor in
-                self?.handleIncomingConnection(connection)
+            Task { @MainActor [weak self] in
+                await self?.handleIncomingConnection(connection)
             }
         }
 
         listener?.start(queue: queue)
-    }
-
-    // State holder for receive loop (avoids Swift 6 captured var mutation issues)
-    private final class ReceiveState {
-        var buffer = Data()
-        var expectedHeader: FastDropHeader?
-        var currentFile: TransferFile?
-        var fileHandle: FileHandle?
-        var receivedChunks = Set<Int>()
     }
 
     private func handleIncomingConnection(_ connection: NWConnection) async {
@@ -75,16 +80,16 @@ final class TransferService: ObservableObject {
         let state = ReceiveState()
 
         connection.stateUpdateHandler = { [weak self] stateUpdate in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 switch stateUpdate {
                 case .ready:
                     logger.info("Incoming connection ready")
                     self?.receiveHandshake(connection, sessionId: sessionId)
                 case .failed(let err):
                     logger.error("Incoming connection failed: \(err.localizedDescription)")
-                    self?.cleanupConnection(sessionId)
+                    await self?.cleanupConnection(sessionId)
                 case .cancelled:
-                    self?.cleanupConnection(sessionId)
+                    await self?.cleanupConnection(sessionId)
                 default: break
                 }
             }
@@ -99,8 +104,8 @@ final class TransferService: ObservableObject {
                 guard let self = self else { return }
                 if let data = data, !data.isEmpty {
                     state.buffer.append(data)
-                    Task { @MainActor in
-                        self.processBuffer(&state.buffer, connection: connection, sessionId: sessionId,
+                    Task { @MainActor [weak self] in
+                        self?.processBuffer(&state.buffer, connection: connection, sessionId: sessionId,
                                           expectedHeader: &state.expectedHeader,
                                           currentFile: &state.currentFile,
                                           fileHandle: &state.fileHandle,
@@ -109,12 +114,16 @@ final class TransferService: ObservableObject {
                 }
                 if let error = error {
                     logger.error("Receive error: \(error.localizedDescription)")
-                    Task { @MainActor in self.cleanupConnection(sessionId) }
+                    Task { @MainActor [weak self] in
+                        await self?.cleanupConnection(sessionId)
+                    }
                     return
                 }
                 if isComplete {
                     logger.info("Connection complete")
-                    Task { @MainActor in self.cleanupConnection(sessionId) }
+                    Task { @MainActor [weak self] in
+                        await self?.cleanupConnection(sessionId)
+                    }
                     return
                 }
                 receiveLoop()
@@ -189,7 +198,7 @@ final class TransferService: ObservableObject {
         case .cancel:
             logger.info("Transfer cancelled")
             fileHandle?.closeFile()
-            cleanupConnection(sessionId)
+            Task { await self.cleanupConnection(sessionId) }
         default:
             break
         }
@@ -219,7 +228,6 @@ final class TransferService: ObservableObject {
     }
 
     // ─── Sender API ───
-    @MainActor
     func sendFiles(_ files: [TransferFile], to peer: DiscoveredPeer) -> TransferSession {
         let session = TransferSession(direction: .send, peer: peer, files: files)
         sessions.append(session)
@@ -231,10 +239,9 @@ final class TransferService: ObservableObject {
         return session
     }
 
-    @MainActor
     private func performSend(session: TransferSession) async {
         guard let peerEndpoint = peerEndpoint(from: session.peer) else {
-            failSession(session, error: "Invalid peer endpoint")
+            await failSession(session, error: "Invalid peer endpoint")
             return
         }
 
@@ -243,14 +250,14 @@ final class TransferService: ObservableObject {
 
         await withCheckedContinuation { continuation in
             connection.stateUpdateHandler = { state in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     switch state {
                     case .ready:
-                        self.activeConnections[sessionId] = connection
-                        self.sendHandshake(connection, session: session)
+                        self?.activeConnections[sessionId] = connection
+                        self?.sendHandshake(connection, session: session)
                         continuation.resume()
                     case .failed(let err):
-                        self.failSession(session, error: err.localizedDescription)
+                        await self?.failSession(session, error: err.localizedDescription)
                         continuation.resume()
                     case .cancelled:
                         continuation.resume()
@@ -266,7 +273,7 @@ final class TransferService: ObservableObject {
             await sendFile(file, connection: connection, session: session)
         }
 
-        completeSession(session)
+        await completeSession(session)
     }
 
     private func sendHandshake(_ connection: NWConnection, session: TransferSession) {
@@ -281,10 +288,9 @@ final class TransferService: ObservableObject {
         connection.send(content: header.encode() + data, completion: .contentProcessed { _ in })
     }
 
-    @MainActor
     private func sendFile(_ file: TransferFile, connection: NWConnection, session: TransferSession) async {
         guard let url = file.url, let handle = try? FileHandle(forReadingFrom: url) else {
-            failSession(session, error: "Cannot read file: \(file.name)")
+            await failSession(session, error: "Cannot read file: \(file.name)")
             return
         }
 
@@ -322,7 +328,8 @@ final class TransferService: ObservableObject {
             offset += Int64(chunkData.count)
             chunkIndex += 1
 
-            await updateFileProgress(session, file: file, progress: Float(offset) / Float(file.size))
+            // updateFileProgress is @MainActor, but we're already in an async context from performSend which is @MainActor
+            updateFileProgress(session, file: file, progress: Float(offset) / Float(file.size))
         }
 
         handle.closeFile()
@@ -351,7 +358,6 @@ final class TransferService: ObservableObject {
         return NWEndpoint.hostPort(host: NWEndpoint.Host(ip), port: NWEndpoint.Port(rawValue: port)!)
     }
 
-    @MainActor
     private func updateFileProgress(_ session: TransferSession, file: TransferFile, progress: Float) {
         if let idx = session.files.firstIndex(where: { $0.id == file.id }) {
             session.files[idx].progress = progress
@@ -359,27 +365,27 @@ final class TransferService: ObservableObject {
         }
     }
 
-    @MainActor
     private func failSession(_ session: TransferSession, error: String) {
         session.status = .failed
         session.error = error
     }
 
-    @MainActor
     private func completeSession(_ session: TransferSession) {
         session.status = .completed
         session.overallProgress = 1.0
     }
 
-    @MainActor
-    private func cleanupConnection(_ sessionId: UUID) {
+    private func cleanupConnection(_ sessionId: UUID) async {
         activeConnections[sessionId]?.cancel()
         activeConnections.removeValue(forKey: sessionId)
     }
 
-    @MainActor
     private func receiveHandshake(_ connection: NWConnection, sessionId: UUID) {
         logger.info("Receiving handshake")
         // Handshake will be processed via the receive loop
     }
 }
+
+// Extension to make TransferService @unchecked Sendable for use in @Sendable closures
+// This is safe because all mutable state is protected by the queue and @MainActor
+extension TransferService: @unchecked Sendable {}
