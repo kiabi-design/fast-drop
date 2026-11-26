@@ -1,4 +1,5 @@
 import SwiftUI
+import FastDropCore
 
 // ──────────────────────────────────────────────
 // Peer Chip Component

@@ -6,17 +6,25 @@ import Combine
 // Metaball data (matches Metal struct)
 // ──────────────────────────────────────────────
 
-struct MetaballData {
-    var pos: SIMD2<Float>      // normalized 0..1
-    var vel: SIMD2<Float>      // normalized velocity
-    var radius: Float          // base radius in points
-    var stretch: Float         // 0..0.55
-    var phase: Float           // idle wobble
+public struct MetaballData {
+    public var pos: SIMD2<Float>      // normalized 0..1
+    public var vel: SIMD2<Float>      // normalized velocity
+    public var radius: Float          // base radius in points
+    public var stretch: Float         // 0..0.55
+    public var phase: Float           // idle wobble
+
+    public init(pos: SIMD2<Float>, vel: SIMD2<Float>, radius: Float, stretch: Float, phase: Float) {
+        self.pos = pos
+        self.vel = vel
+        self.radius = radius
+        self.stretch = stretch
+        self.phase = phase
+    }
 }
 
 // MetaballRenderer is non-isolated because MTKViewDelegate methods run on the render thread
 // @Published properties are @MainActor isolated via property wrapper
-final class MetaballRenderer: NSObject, MTKViewDelegate {
+public final class MetaballRenderer: NSObject, MTKViewDelegate {
     // ─── Metal resources (nonisolated - accessed from render thread) ───
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -176,20 +184,38 @@ final class MetaballRenderer: NSObject, MTKViewDelegate {
 // Uniform structs (must match Metal)
 // ──────────────────────────────────────────────
 
-struct Uniforms {
-    var count: UInt32
-    var time: Float
-    var resolution: SIMD2<Float>
-    var pixelRatio: Float
-    var threshold: Float
-    var _pad: (Float, Float, Float)
+public struct Uniforms {
+    public var count: UInt32
+    public var time: Float
+    public var resolution: SIMD2<Float>
+    public var pixelRatio: Float
+    public var threshold: Float
+    public var _pad: (Float, Float, Float)
+
+    public init(count: UInt32, time: Float, resolution: SIMD2<Float>, pixelRatio: Float, threshold: Float) {
+        self.count = count
+        self.time = time
+        self.resolution = resolution
+        self.pixelRatio = pixelRatio
+        self.threshold = threshold
+        self._pad = (0, 0, 0)
+    }
 }
 
-struct Metaball {
-    var pos: SIMD2<Float>
-    var vel: SIMD2<Float>
-    var radius: Float
-    var stretch: Float
-    var phase: Float
-    var _pad: (Float, Float, Float)
+public struct Metaball {
+    public var pos: SIMD2<Float>
+    public var vel: SIMD2<Float>
+    public var radius: Float
+    public var stretch: Float
+    public var phase: Float
+    public var _pad: (Float, Float, Float)
+
+    public init(pos: SIMD2<Float>, vel: SIMD2<Float>, radius: Float, stretch: Float, phase: Float) {
+        self.pos = pos
+        self.vel = vel
+        self.radius = radius
+        self.stretch = stretch
+        self.phase = phase
+        self._pad = (0, 0, 0)
+    }
 }

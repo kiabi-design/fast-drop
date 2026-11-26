@@ -1,5 +1,6 @@
 import SwiftUI
 import MetalKit
+import FastDropCore
 
 // ──────────────────────────────────────────────
 // Transfer Scene View (Black Hole Animation)
@@ -148,7 +149,7 @@ struct TransferSceneView: View {
     }
 
     private func setupTransferScene(geometry: GeometryProxy) {
-        renderer = TransferSceneRenderer(metalView: metalView)
+        renderer = TransferSceneRenderer.create(metalView: metalView)
         renderer?.startTransfer(ringCount: files.count, viewportSize: geometry.size)
         metalView.contentScaleFactor = UIScreen.main.scale
     }

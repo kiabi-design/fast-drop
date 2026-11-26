@@ -5,20 +5,32 @@ import SwiftUI
 // Transfer Scene Renderer (rings, black hole, ripple)
 // ──────────────────────────────────────────────
 
-struct TransferRing {
-    var center: SIMD2<Float>   // normalized 0..1
-    var maxRadius: Float       // normalized
-    var progress: Float        // 0..1
-    var isActive: Bool
+public struct TransferRing {
+    public var center: SIMD2<Float>   // normalized 0..1
+    public var maxRadius: Float       // normalized
+    public var progress: Float        // 0..1
+    public var isActive: Bool
+
+    public init(center: SIMD2<Float>, maxRadius: Float, progress: Float, isActive: Bool) {
+        self.center = center
+        self.maxRadius = maxRadius
+        self.progress = progress
+        self.isActive = isActive
+    }
 }
 
-struct BlackHoleState {
-    var radius: Float          // normalized
-    var pulse: Float           // phase
+public struct BlackHoleState {
+    public var radius: Float          // normalized
+    public var pulse: Float           // phase
+
+    public init(radius: Float, pulse: Float) {
+        self.radius = radius
+        self.pulse = pulse
+    }
 }
 
 // TransferSceneRenderer is non-isolated because MTKViewDelegate methods run on the render thread
-final class TransferSceneRenderer: NSObject, MTKViewDelegate {
+public final class TransferSceneRenderer: NSObject, MTKViewDelegate {
     // ─── Metal resources (nonisolated - accessed from render thread) ───
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -201,16 +213,34 @@ final class TransferSceneRenderer: NSObject, MTKViewDelegate {
 // Transfer Uniforms (matches Metal)
 // ──────────────────────────────────────────────
 
-struct TransferUniforms {
-    var time: Float
-    var center: SIMD2<Float>
-    var progress: Float
-    var ringCount: UInt32
-    var ringProgress: (Float, Float, Float, Float, Float, Float, Float, Float)
-    var ringCenter: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>,
+public struct TransferUniforms {
+    public var time: Float
+    public var center: SIMD2<Float>
+    public var progress: Float
+    public var ringCount: UInt32
+    public var ringProgress: (Float, Float, Float, Float, Float, Float, Float, Float)
+    public var ringCenter: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>,
                      SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)
-    var ringRadius: (Float, Float, Float, Float, Float, Float, Float, Float)
-    var blackHoleRadius: Float
-    var blackHolePulse: Float
-    var _pad: (Float, Float)
+    public var ringRadius: (Float, Float, Float, Float, Float, Float, Float, Float)
+    public var blackHoleRadius: Float
+    public var blackHolePulse: Float
+    public var _pad: (Float, Float)
+
+    public init(time: Float, center: SIMD2<Float>, progress: Float, ringCount: UInt32,
+                ringProgress: (Float, Float, Float, Float, Float, Float, Float, Float),
+                ringCenter: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>,
+                            SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>),
+                ringRadius: (Float, Float, Float, Float, Float, Float, Float, Float),
+                blackHoleRadius: Float, blackHolePulse: Float) {
+        self.time = time
+        self.center = center
+        self.progress = progress
+        self.ringCount = ringCount
+        self.ringProgress = ringProgress
+        self.ringCenter = ringCenter
+        self.ringRadius = ringRadius
+        self.blackHoleRadius = blackHoleRadius
+        self.blackHolePulse = blackHolePulse
+        self._pad = (0, 0)
+    }
 }

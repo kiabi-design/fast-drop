@@ -25,16 +25,16 @@ private final class ReceiveState: @unchecked Sendable {
 // - @Published properties are @MainActor isolated
 // - We never share mutable state across concurrency domains without synchronization
 @MainActor
-final class TransferService: ObservableObject {
-    @Published private(set) var sessions: [TransferSession] = []
-    @Published var error: String?
+public final class TransferService: ObservableObject {
+    @Published public private(set) var sessions: [TransferSession] = []
+    @Published public var error: String?
 
     private let queue = DispatchQueue(label: "fastdrop.transfer", qos: .userInitiated)
     private let parameters: NWParameters
     private var listener: NWListener?
     private var activeConnections: [UUID: NWConnection] = [:]
 
-    init() {
+    public init() {
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.enableKeepalive = true
         tcpOptions.keepaliveIdle = 30
@@ -230,7 +230,7 @@ final class TransferService: ObservableObject {
     }
 
     // ─── Sender API ───
-    func sendFiles(_ files: [TransferFile], to peer: DiscoveredPeer) -> TransferSession {
+    public func sendFiles(_ files: [TransferFile], to peer: DiscoveredPeer) -> TransferSession {
         let session = TransferSession(direction: .send, peer: peer, files: files)
         sessions.append(session)
 

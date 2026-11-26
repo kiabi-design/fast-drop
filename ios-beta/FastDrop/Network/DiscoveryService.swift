@@ -7,16 +7,16 @@ import Combine
 // ──────────────────────────────────────────────
 
 @MainActor
-final class DiscoveryService: ObservableObject {
-    @Published private(set) var peers: [DiscoveredPeer] = []
-    @Published private(set) var isScanning = false
-    @Published var error: String?
+public final class DiscoveryService: ObservableObject {
+    @Published public private(set) var peers: [DiscoveredPeer] = []
+    @Published public private(set) var isScanning = false
+    @Published public var error: String?
 
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "fastdrop.discovery", qos: .userInitiated)
     private let parameters: NWParameters
 
-    init() {
+    public init() {
         // Use TCP with Bonjour
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.enableKeepalive = true
@@ -25,7 +25,7 @@ final class DiscoveryService: ObservableObject {
         self.parameters.includePeerToPeer = true
     }
 
-    func startScanning() {
+    public func startScanning() {
         guard !isScanning else { return }
         isScanning = true
         error = nil
@@ -57,7 +57,7 @@ final class DiscoveryService: ObservableObject {
         browser?.start(queue: queue)
     }
 
-    func stopScanning() {
+    public func stopScanning() {
         browser?.cancel()
         browser = nil
         isScanning = false
