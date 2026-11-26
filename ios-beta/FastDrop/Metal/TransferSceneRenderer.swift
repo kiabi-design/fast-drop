@@ -130,18 +130,20 @@ final class TransferSceneRenderer: NSObject, MTKViewDelegate {
         pixelRatio = Float(scale)
     }
 
-    // ─── MTKViewDelegate (nonisolated - runs on render thread) ───
-    nonisolated func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+    // ─── MTKViewDelegate (@MainActor - runs on main thread in Swift 6) ───
+    @MainActor
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         viewportSize = size
         pixelRatio = Float(view.contentScaleFactor)
     }
 
-    nonisolated func draw(in view: MTKView) {
+    @MainActor
+    func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor else { return }
 
         let now = CACurrentMediaTime()
-        let dt = lastTime > 0 ? now - lastTime : 1/60
+        _ = lastTime > 0 ? now - lastTime : 1/60
         lastTime = now
 
         updateUniforms(time: Float(now))

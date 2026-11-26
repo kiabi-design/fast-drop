@@ -98,68 +98,74 @@ final class TransferService: ObservableObject {
         connection.start(queue: queue)
         activeConnections[sessionId] = connection
 
-        // Receive loop
+        // Start the receive loop using a static method to avoid capture issues
+        Self.startReceiveLoop(connection: connection, sessionId: sessionId, state: state, queue: queue, service: self)
+    }
+
+    // Static method to run the receive loop without capturing self in a non-Sendable way
+    private static func startReceiveLoop(connection: NWConnection, sessionId: UUID, state: ReceiveState, queue: DispatchQueue, service: TransferService) {
+        // Use a recursive function that doesn't capture inout parameters
         func receiveLoop() {
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { [weak self] data, _, isComplete, error in
-                guard let self = self else { return }
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { @Sendable [weak service] data, _, isComplete, error in
+                guard let service = service else { return }
+
                 if let data = data, !data.isEmpty {
                     state.buffer.append(data)
-                    Task { @MainActor [weak self] in
-                        self?.processBuffer(&state.buffer, connection: connection, sessionId: sessionId,
-                                          expectedHeader: &state.expectedHeader,
-                                          currentFile: &state.currentFile,
-                                          fileHandle: &state.fileHandle,
-                                          receivedChunks: &state.receivedChunks)
+                    // Process buffer on main actor
+                    Task { @MainActor [weak service] in
+                        guard let service = service else { return }
+                        service.processBuffer(state: state, connection: connection, sessionId: sessionId)
                     }
                 }
+
                 if let error = error {
                     logger.error("Receive error: \(error.localizedDescription)")
-                    Task { @MainActor [weak self] in
-                        self?.cleanupConnection(sessionId)
+                    Task { @MainActor [weak service] in
+                        service?.cleanupConnection(sessionId)
                     }
                     return
                 }
+
                 if isComplete {
                     logger.info("Connection complete")
-                    Task { @MainActor [weak self] in
-                        self?.cleanupConnection(sessionId)
+                    Task { @MainActor [weak service] in
+                        service?.cleanupConnection(sessionId)
                     }
                     return
                 }
+
+                // Continue the loop
                 receiveLoop()
             }
         }
         receiveLoop()
     }
 
-    private func processBuffer(_ buffer: inout Data, connection: NWConnection, sessionId: UUID,
-                               expectedHeader: inout FastDropHeader?,
-                               currentFile: inout TransferFile?,
-                               fileHandle: inout FileHandle?,
-                               receivedChunks: inout Set<Int>) {
+    // Updated processBuffer to use ReceiveState instead of inout parameters
+    private func processBuffer(state: ReceiveState, connection: NWConnection, sessionId: UUID) {
+        var buffer = state.buffer
         while true {
-            if expectedHeader == nil {
+            if state.expectedHeader == nil {
                 guard buffer.count >= FastDropHeader.size,
                       let header = FastDropHeader.decode(buffer) else { break }
-                expectedHeader = header
+                state.expectedHeader = header
                 buffer.removeFirst(FastDropHeader.size)
             }
 
-            guard let header = expectedHeader,
+            guard let header = state.expectedHeader,
                   buffer.count >= header.payloadLength else { break }
 
             let payload = buffer.prefix(Int(header.payloadLength))
             buffer.removeFirst(Int(header.payloadLength))
-            expectedHeader = nil
+            state.expectedHeader = nil
+            state.buffer = buffer
 
-            handlePayload(header: header, payload: Data(payload), connection: connection, sessionId: sessionId,
-                          currentFile: &currentFile, fileHandle: &fileHandle, receivedChunks: &receivedChunks)
+            handlePayload(header: header, payload: Data(payload), connection: connection, sessionId: sessionId, state: state)
         }
     }
 
-    private func handlePayload(header: FastDropHeader, payload: Data, connection: NWConnection, sessionId: UUID,
-                               currentFile: inout TransferFile?, fileHandle: inout FileHandle?,
-                               receivedChunks: inout Set<Int>) {
+    // Updated handlePayload to use ReceiveState
+    private func handlePayload(header: FastDropHeader, payload: Data, connection: NWConnection, sessionId: UUID, state: ReceiveState) {
         switch header.type {
         case .handshake:
             if let handshake = try? JSONDecoder().decode(HandshakePayload.self, from: payload) {
@@ -170,49 +176,45 @@ final class TransferService: ObservableObject {
             if let fileHeader = try? JSONDecoder().decode(FileHeaderPayload.self, from: payload) {
                 let docsUrl = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 let destUrl = docsUrl.appendingPathComponent(fileHeader.fileName)
-                fileHandle = try? FileHandle(forWritingTo: destUrl)
-                if fileHandle == nil {
+                state.fileHandle = try? FileHandle(forWritingTo: destUrl)
+                if state.fileHandle == nil {
                     FileManager.default.createFile(atPath: destUrl.path, contents: nil)
-                    fileHandle = try? FileHandle(forWritingTo: destUrl)
+                    state.fileHandle = try? FileHandle(forWritingTo: destUrl)
                 }
-                currentFile = TransferFile(
+                state.currentFile = TransferFile(
                     fileId: fileHeader.fileId,
                     name: fileHeader.fileName,
                     size: fileHeader.fileSize,
                     mimeType: fileHeader.mimeType,
                     url: destUrl
                 )
-                receivedChunks.removeAll()
+                state.receivedChunks.removeAll()
                 sendChunkAck(connection, fileId: fileHeader.fileId, chunkIndex: -1, receivedBytes: 0)
             }
         case .chunk:
-            handleChunk(payload, connection: connection, currentFile: &currentFile,
-                        fileHandle: &fileHandle, receivedChunks: &receivedChunks)
+            handleChunk(payload, connection: connection, state: state)
         case .done:
-            if let done = try? JSONDecoder().decode(DonePayload.self, from: payload) {
-                logger.info("Transfer done: \(done.fileId)")
-                fileHandle?.closeFile()
-                fileHandle = nil
-                currentFile = nil
+            if let _ = try? JSONDecoder().decode(DonePayload.self, from: payload) {
+                logger.info("Transfer done")
+                state.fileHandle?.closeFile()
+                state.fileHandle = nil
+                state.currentFile = nil
             }
         case .cancel:
             logger.info("Transfer cancelled")
-            fileHandle?.closeFile()
+            state.fileHandle?.closeFile()
             cleanupConnection(sessionId)
         default:
             break
         }
     }
 
-    private func handleChunk(_ data: Data, connection: NWConnection, currentFile: inout TransferFile?,
-                             fileHandle: inout FileHandle?, receivedChunks: inout Set<Int>) {
-        // Simplified chunk parsing - in production use proper binary format
-        guard var file = currentFile, let handle = fileHandle else { return }
-        // Write data (skip simple header parsing for brevity)
+    // Updated handleChunk to use ReceiveState
+    private func handleChunk(_ data: Data, connection: NWConnection, state: ReceiveState) {
+        guard var file = state.currentFile, let handle = state.fileHandle else { return }
         handle.write(data)
-        // Update progress
         file.progress = min(1.0, file.progress + Float(data.count) / Float(file.size))
-        currentFile = file
+        state.currentFile = file
     }
 
     private func sendHandshakeAck(_ connection: NWConnection) {
