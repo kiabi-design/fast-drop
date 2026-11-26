@@ -16,6 +16,7 @@ targets:
         excludes:
           - App
           - UI
+          - App/Resources/Info.plist
     resources:
       - Metal/MetaballShader.metal
     settings:
