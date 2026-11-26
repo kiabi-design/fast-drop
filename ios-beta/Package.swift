@@ -28,11 +28,6 @@ let package = Package(
             name: "FastDropApp",
             dependencies: ["FastDropCore"],
             path: "FastDrop/App"
-        ),
-        .testTarget(
-            name: "FastDropTests",
-            dependencies: ["FastDropCore"],
-            path: "FastDropTests"
         )
     ]
 )

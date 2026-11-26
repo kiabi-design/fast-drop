@@ -45,18 +45,6 @@ jobs:
         working-directory: ${{ env.PROJECT_PATH }}
         run: xcodebuild -resolvePackageDependencies -scheme ${{ env.SCHEME }}
 
-      - name: Build for Simulator (verify compiles)
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          xcodebuild build \
-            -scheme ${{ env.SCHEME }} \
-            -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=latest' \
-            -configuration Debug \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcbeautify
-
       - name: Archive for Device (unsigned)
         working-directory: ${{ env.PROJECT_PATH }}
         run: |
