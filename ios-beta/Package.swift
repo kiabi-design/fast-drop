@@ -19,9 +19,7 @@ let package = Package(
             path: "FastDrop",
             exclude: ["App", "UI"],
             resources: [
-                .process("Metal/MetaballShader.metal"),
-                .process("Metal/TransferSceneRenderer.swift"),
-                .process("Resources/Info.plist")
+                .process("Metal/MetaballShader.metal")
             ]
         ),
         .executableTarget(
