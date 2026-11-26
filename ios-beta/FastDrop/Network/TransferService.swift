@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Combine
 import os.log
+import UIKit
 
 // ──────────────────────────────────────────────
 // Transfer Service (Sender & Receiver)
@@ -51,13 +52,15 @@ final class TransferService: ObservableObject {
         }
 
         listener?.newConnectionHandler = { [weak self] connection in
-            self?.handleIncomingConnection(connection)
+            Task { @MainActor in
+                await self?.handleIncomingConnection(connection)
+            }
         }
 
         listener?.start(queue: queue)
     }
 
-    private func handleIncomingConnection(_ connection: NWConnection) {
+    private func handleIncomingConnection(_ connection: NWConnection) async {
         let sessionId = UUID()
         var buffer = Data()
         var expectedHeader: FastDropHeader?
@@ -86,7 +89,8 @@ final class TransferService: ObservableObject {
 
         // Receive loop
         func receiveLoop() {
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { data, _, isComplete, error in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { [weak self] data, _, isComplete, error in
+                guard let self = self else { return }
                 if let data = data, !data.isEmpty {
                     buffer.append(data)
                     Task { @MainActor in
@@ -167,8 +171,6 @@ final class TransferService: ObservableObject {
                 sendChunkAck(connection, fileId: fileHeader.fileId, chunkIndex: -1, receivedBytes: 0)
             }
         case .chunk:
-            // Parse chunk: fileId (string) + chunkIndex (int) + isLast (bool) + data
-            // Simplified: assume JSON header + binary data
             handleChunk(payload, connection: connection, currentFile: &currentFile,
                         fileHandle: &fileHandle, receivedChunks: &receivedChunks)
         case .done:
@@ -195,8 +197,8 @@ final class TransferService: ObservableObject {
         handle.write(data)
         // Update progress
         Task { @MainActor in
-            currentFile?.progress = min(1.0, currentFile?.progress ?? 0 + Float(data.count) / Float(file.size))
-            self.updateSessionProgress(sessionId: UUID(), file: currentFile!)
+            currentFile?.progress = min(1.0, (currentFile?.progress ?? 0) + Float(data.count) / Float(file.size))
+            // Progress updates are handled via the session's @Published properties
         }
     }
 
@@ -290,7 +292,7 @@ final class TransferService: ObservableObject {
             chunkCount: chunkCount
         )
         let data = (try? JSONEncoder().encode(header)) ?? Data()
-        var hdr = FastDropHeader(type: .fileHeader, sequence: 2, payloadLength: UInt32(data.count))
+        let hdr = FastDropHeader(type: .fileHeader, sequence: 2, payloadLength: UInt32(data.count))
         connection.send(content: hdr.encode() + data, completion: .contentProcessed { _ in })
 
         // Send chunks
@@ -304,7 +306,7 @@ final class TransferService: ObservableObject {
             // Send chunk with simple framing
             let isLast = (offset + Int64(chunkData.count)) >= file.size
             let chunkPayload = createChunkPayload(fileId: file.fileId, index: chunkIndex, data: chunkData, isLast: isLast)
-            var chunkHeader = FastDropHeader(type: .chunk, sequence: UInt32(3 + chunkIndex), payloadLength: UInt32(chunkPayload.count))
+            let chunkHeader = FastDropHeader(type: .chunk, sequence: UInt32(3 + chunkIndex), payloadLength: UInt32(chunkPayload.count))
             connection.send(content: chunkHeader.encode() + chunkPayload, completion: .contentProcessed { _ in })
 
             // Wait for ack (simplified - in production use proper flow control)
@@ -321,7 +323,7 @@ final class TransferService: ObservableObject {
         // Send done
         let done = DonePayload(fileId: file.fileId, totalBytes: file.size, checksum: nil)
         let doneData = (try? JSONEncoder().encode(done)) ?? Data()
-        var doneHeader = FastDropHeader(type: .done, sequence: UInt32(3 + chunkIndex), payloadLength: UInt32(doneData.count))
+        let doneHeader = FastDropHeader(type: .done, sequence: UInt32(3 + chunkIndex), payloadLength: UInt32(doneData.count))
         connection.send(content: doneHeader.encode() + doneData, completion: .contentProcessed { _ in })
     }
 
@@ -371,11 +373,5 @@ final class TransferService: ObservableObject {
     private func receiveHandshake(_ connection: NWConnection, sessionId: UUID) {
         logger.info("Receiving handshake")
         // Handshake will be processed via the receive loop
-    }
-
-    @MainActor
-    private func updateSessionProgress(sessionId: UUID, file: TransferFile) {
-        // Progress updates are handled via the session's @Published properties
-        // which automatically trigger UI updates through objectWillChange
     }
 }
